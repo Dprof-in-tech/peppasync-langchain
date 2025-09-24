@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 import re
 
 # Import centralized configuration
-from .config import LLMManager, AppConfig
+from .config import LLMManager
 
 load_dotenv()
 logger = logging.getLogger(__name__)

@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from .prompt_engine import PeppaPromptEngine
 from .config import LLMManager
 from .utils.common import ValidationUtils, LoggingUtils, ResponseFormatter
+from .agent import UnifiedBusinessAgent
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -45,6 +46,9 @@ class ConversationManager:
         # Initialize advanced prompt engine
         self.prompt_engine = PeppaPromptEngine()
         
+        # Initialize unified business agent
+        self.business_agent = UnifiedBusinessAgent()
+        
         # In-memory session storage (in production, use Redis or database)
         self.sessions: Dict[str, Dict] = {}
         
@@ -57,7 +61,7 @@ class ConversationManager:
         # Define the workflow steps
         workflow = StateGraph(ConversationState)
         
-        # Add nodes
+        # Add nodes for conversation flow
         workflow.add_node("analyze_query", self._analyze_query_node)
         workflow.add_node("classify_prompt", self._classify_prompt_node)
         workflow.add_node("load_context", self._load_context_node)
@@ -65,10 +69,8 @@ class ConversationManager:
         workflow.add_node("generate_response", self._generate_response_node)
         workflow.add_node("save_session", self._save_session_node)
         
-        # Set entry point
+        # Set entry point and edges
         workflow.set_entry_point("analyze_query")
-        
-        # Add edges
         workflow.add_edge("analyze_query", "classify_prompt")
         workflow.add_edge("classify_prompt", "load_context")
         workflow.add_edge("load_context", "enhance_query")
@@ -213,48 +215,69 @@ Please answer the current question considering the conversation context where re
         return state
 
     async def _generate_response_node(self, state: ConversationState) -> ConversationState:
-        """Generate response using sophisticated business intelligence analysis"""
+        """Generate response using UnifiedBusinessAgent"""
         try:
-            # Check if we need advanced analysis
+            # Check if we need advanced business analysis
             if state.requires_advanced_analysis and state.prompt_analysis:
-                logger.info(f"Using advanced analysis for {state.business_category} query")
+                logger.info(f"Using unified agent for {state.business_category} query")
                 
-                # Generate sophisticated response using prompt engine
-                advanced_response = await self.prompt_engine.generate_sophisticated_response(state.prompt_analysis)
+                # Use unified business agent for comprehensive analysis
+                business_result = await self.business_agent.analyze(
+                    query=state.query,
+                    business_category=state.business_category,
+                    analysis_type=state.analysis_type
+                )
                 
-                # Also get traditional RAG response for citations
-                from .peppagenbi import GenBISQL
-                genbi = GenBISQL()
-                rag_response = await genbi.retrieve_and_generate(state.query, state.session_id)
-                
-                if rag_response:
-                    # Combine advanced analysis with RAG citations
-                    state.response = f"{advanced_response}\n\n---\n\n**Additional Context from Data:**\n{rag_response.get('output', '')}"
-                    state.citations = rag_response.get('citations', [])
+                if business_result.get("status") == "success":
+                    # Format the business analysis response
+                    insights = business_result.get("insights", "")
+                    alerts = business_result.get("alerts", [])
+                    recommendations = business_result.get("recommendations", [])
+                    
+                    response_parts = []
+                    
+                    # Add insights
+                    if insights:
+                        response_parts.append(f"## Business Analysis:\n{insights}")
+                    
+                    # Add critical alerts
+                    critical_alerts = [a for a in alerts if a.get("priority") == "CRITICAL"]
+                    if critical_alerts:
+                        response_parts.append("\n## 🚨 Critical Alerts:")
+                        for alert in critical_alerts:
+                            response_parts.append(f"- {alert.get('message', 'Alert')}")
+                    
+                    # Add top recommendations
+                    high_priority_recs = [r for r in recommendations if r.get("priority") == "HIGH"][:3]
+                    if high_priority_recs:
+                        response_parts.append("\n## 💡 Key Recommendations:")
+                        for rec in high_priority_recs:
+                            response_parts.append(f"- {rec.get('action', 'Recommendation')}: {rec.get('details', '')}")
+                    
+                    # Add summary
+                    summary = business_result.get("data_summary", {})
+                    if summary:
+                        response_parts.append(f"\n## Summary:")
+                        response_parts.append(f"- Total Alerts: {summary.get('total_alerts', 0)}")
+                        response_parts.append(f"- Recommendations: {summary.get('total_recommendations', 0)}")
+                        if summary.get('critical_alerts', 0) > 0:
+                            response_parts.append(f"- Critical Issues: {summary.get('critical_alerts', 0)}")
+                    
+                    state.response = "\n".join(response_parts)
+                    
+                    # Add analysis metadata
+                    state.response += f"\n\n---\n*Analysis Type: {state.analysis_type.title()} | Category: {state.business_category.replace('_', ' ').title()}*"
+                    
                 else:
-                    state.response = advanced_response
-                    state.citations = []
+                    # Fallback to traditional RAG if business analysis fails
+                    logger.warning(f"Business analysis failed, falling back to RAG: {business_result.get('error')}")
+                    await self._fallback_to_rag(state)
                 
-                # Add analysis metadata to response
-                state.response += f"\n\n---\n\n*Analysis Type: {state.analysis_type.title()} | Category: {state.business_category.replace('_', ' ').title()} | Confidence: {state.prompt_analysis.get('confidence', 0):.2f}*"
-                
-                logger.info(f"Generated sophisticated response for {state.business_category} analysis")
+                logger.info(f"Generated unified agent response for {state.business_category} analysis")
                 
             else:
                 # Use traditional RAG for simpler queries
-                logger.info("Using traditional RAG analysis")
-                from .peppagenbi import GenBISQL
-                
-                genbi = GenBISQL()
-                rag_response = await genbi.retrieve_and_generate(state.query, state.session_id)
-                
-                if rag_response:
-                    state.response = rag_response.get('output', '')
-                    state.citations = rag_response.get('citations', [])
-                    logger.info(f"Generated traditional RAG response for session: {state.session_id}")
-                else:
-                    state.response = "I couldn't generate a response. Please try again."
-                    state.citations = []
+                await self._fallback_to_rag(state)
                     
         except Exception as e:
             logger.error(f"Error in generate_response_node: {e}")
@@ -262,6 +285,27 @@ Please answer the current question considering the conversation context where re
             state.response = "I encountered an error generating a response. Please try rephrasing your question."
             
         return state
+
+    async def _fallback_to_rag(self, state: ConversationState):
+        """Fallback to traditional RAG for simpler queries"""
+        try:
+            logger.info("Using traditional RAG analysis")
+            from .peppagenbi import GenBISQL
+            
+            genbi = GenBISQL()
+            rag_response = await genbi.retrieve_and_generate(state.query, state.session_id)
+            
+            if rag_response:
+                state.response = rag_response.get('output', '')
+                state.citations = rag_response.get('citations', [])
+                logger.info(f"Generated traditional RAG response for session: {state.session_id}")
+            else:
+                state.response = "I couldn't generate a response. Please try again."
+                state.citations = []
+                
+        except Exception as e:
+            logger.error(f"RAG fallback failed: {e}")
+            state.response = "I encountered an error. Please try again."
 
     async def _save_session_node(self, state: ConversationState) -> ConversationState:
         """Save conversation exchange to session memory"""

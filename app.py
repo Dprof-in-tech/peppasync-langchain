@@ -13,11 +13,10 @@ from dotenv import load_dotenv
 from lib.peppagenbi import GenBISQL
 from lib.utils.utils import parse_api_response
 from lib.conversation_manager import ConversationManager
-from lib.analytics_engine import SimpleAnalyticsEngine
-from lib.agents.inventory_agent import InventoryAgent
-from lib.agents.marketing_agent import MarketingAgent
+from lib.agent import UnifiedBusinessAgent
 from lib.prompt_engine import PeppaPromptEngine
 from lib.config import AppConfig, LLMManager
+from lib.tool_registry import ToolRegistry
 
 # Load environment variables
 load_dotenv()
@@ -48,9 +47,7 @@ app.add_middleware(
 # Initialize components
 genbiapp = GenBISQL()
 conversation_manager = ConversationManager()
-analytics_engine = SimpleAnalyticsEngine()
-inventory_agent = InventoryAgent()
-marketing_agent = MarketingAgent()
+business_agent = UnifiedBusinessAgent()
 prompt_engine = PeppaPromptEngine()
 
 # Pydantic models
@@ -98,9 +95,25 @@ async def enhanced_chat(request: ChatRequest):
 
 @app.post("/analytics/{analysis_type}")
 async def run_analytics(analysis_type: str, request: AnalyticsRequest):
-    """Run analytics using the simple analytics engine"""
+    """Run analytics using the unified business agent"""
     try:
-        result = await analytics_engine.execute_analysis(analysis_type, request.filters)
+        # Map analysis type to business category
+        category_mapping = {
+            "sales_performance": "sales_revenue",
+            "inventory_analysis": "inventory_operations",
+            "marketing_performance": "marketing_customer",
+            "customer_segmentation": "customer_behavior",
+            "revenue_trends": "sales_revenue",
+            "product_performance": "sales_revenue"
+        }
+        
+        business_category = category_mapping.get(analysis_type, "general_analysis")
+        
+        result = await business_agent.analyze(
+            query=f"Analyze {analysis_type} for business insights",
+            business_category=business_category,
+            analysis_type="descriptive"
+        )
         
         logger.info(f"Analytics executed: {analysis_type}")
         return result
@@ -118,19 +131,23 @@ async def run_analytics(analysis_type: str, request: AnalyticsRequest):
 
 @app.post("/agents/inventory/run")
 async def run_inventory_agent():
-    """Run the inventory monitoring agent"""
+    """Run inventory monitoring using unified business agent"""
     try:
-        result = await inventory_agent.run_inventory_monitoring()
+        result = await business_agent.analyze(
+            query="Monitor inventory levels and generate alerts for low stock items",
+            business_category="inventory_operations",
+            analysis_type="diagnostic"
+        )
         
-        logger.info(f"Inventory agent executed: {result.get('status')}")
+        logger.info(f"Inventory analysis executed: {result.get('status')}")
         return result
         
     except Exception as e:
-        logger.error(f"Error running inventory agent: {e}")
+        logger.error(f"Error running inventory analysis: {e}")
         raise HTTPException(
             status_code=500,
             detail={
-                'error': 'Inventory agent failed',
+                'error': 'Inventory analysis failed',
                 'message': str(e),
                 'status': 'error'
             }
@@ -139,51 +156,35 @@ async def run_inventory_agent():
 
 @app.post("/agents/marketing/run")
 async def run_marketing_agent():
-    """Run the marketing optimization agent"""
+    """Run marketing optimization using unified business agent"""
     try:
-        result = await marketing_agent.run_marketing_optimization()
+        result = await business_agent.analyze(
+            query="Analyze marketing campaign performance and optimize ROAS",
+            business_category="marketing_customer",
+            analysis_type="prescriptive"
+        )
         
-        logger.info(f"Marketing agent executed: {result.get('status')}")
+        logger.info(f"Marketing analysis executed: {result.get('status')}")
         return result
         
     except Exception as e:
-        logger.error(f"Error running marketing agent: {e}")
+        logger.error(f"Error running marketing analysis: {e}")
         raise HTTPException(
             status_code=500,
             detail={
-                'error': 'Marketing agent failed',
+                'error': 'Marketing analysis failed',
                 'message': str(e),
                 'status': 'error'
             }
         )
 
 
-@app.get("/agents/status")
-async def get_agents_status():
-    """Get status of all agents"""
-    try:
-        status = {
-            'inventory_agent': await inventory_agent.get_agent_status(),
-            'marketing_agent': await marketing_agent.get_agent_status(),
-            'timestamp': int(time.time())
-        }
-        
-        return status
-        
-    except Exception as e:
-        logger.error(f"Error getting agent status: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={'error': 'Failed to get agent status'}
-        )
 
-
-@app.post("/analyze-prompt")
-async def analyze_business_prompt(request: ChatRequest):
-    """Analyze and classify business intelligence prompts"""
+# Internal function for prompt analysis (used by other endpoints)
+async def _analyze_business_prompt_internal(prompt: str):
+    """Internal function to analyze and classify business intelligence prompts"""
     try:
-        # Analyze the prompt
-        analysis = await prompt_engine.analyze_prompt(request.prompt)
+        analysis = await prompt_engine.analyze_prompt(prompt)
         
         # Generate sophisticated response if it's a complex business query
         if analysis.get('confidence', 0) > 0.6:
@@ -191,21 +192,17 @@ async def analyze_business_prompt(request: ChatRequest):
             analysis['generated_response'] = sophisticated_response
         
         logger.info(f"Analyzed prompt: {analysis.get('category')} - {analysis.get('analysis_type')}")
-        return {
-            "prompt_analysis": analysis,
-            "timestamp": int(time.time()),
-            "status": "success"
-        }
+        return analysis
         
     except Exception as e:
         logger.error(f"Error analyzing prompt: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                'error': 'Failed to analyze prompt',
-                'message': str(e)
-            }
-        )
+        return {
+            'error': 'Failed to analyze prompt',
+            'message': str(e),
+            'category': 'general_analysis',
+            'analysis_type': 'descriptive',
+            'confidence': 0.3
+        }
 
 
 @app.get("/prompt-capabilities")
@@ -240,23 +237,30 @@ async def get_prompt_capabilities():
         )
 
 
-@app.post("/sophisticated-analysis")
-async def sophisticated_business_analysis(request: ChatRequest):
-    """Endpoint for sophisticated retail business analysis"""
+@app.post("/unified-analysis")
+async def unified_business_analysis(request: ChatRequest):
+    """New unified business analysis endpoint showcasing the refactored architecture"""
     session_id = request.session_id or str(uuid.uuid4())
     
     try:
-        # First analyze and classify the prompt
-        analysis = await prompt_engine.analyze_prompt(request.prompt)
+        # First classify the prompt using internal function
+        analysis = await _analyze_business_prompt_internal(request.prompt)
         
-        # Generate sophisticated response
-        sophisticated_response = await prompt_engine.generate_sophisticated_response(analysis)
-        
-        # Get supporting data from RAG system
-        rag_response = await genbiapp.retrieve_and_generate(request.prompt, session_id)
+        # Use unified business agent for comprehensive analysis
+        business_result = await business_agent.analyze(
+            query=request.prompt,
+            business_category=analysis.get('category', 'general_analysis'),
+            analysis_type=analysis.get('analysis_type', 'descriptive')
+        )
         
         return {
-            "sophisticated_analysis": sophisticated_response,
+            "unified_analysis": {
+                "status": business_result.get("status"),
+                "insights": business_result.get("insights"),
+                "alerts": business_result.get("alerts", []),
+                "recommendations": business_result.get("recommendations", []),
+                "data_summary": business_result.get("data_summary", {})
+            },
             "prompt_classification": {
                 "category": analysis.get('category'),
                 "analysis_type": analysis.get('analysis_type'),
@@ -264,18 +268,21 @@ async def sophisticated_business_analysis(request: ChatRequest):
                 "key_metrics": analysis.get('key_metrics', []),
                 "time_horizon": analysis.get('time_horizon')
             },
-            "supporting_data": rag_response.get('output', '') if rag_response else '',
-            "citations": rag_response.get('citations', []) if rag_response else [],
+            "system_info": {
+                "architecture": "Unified Business Agent",
+                "tools_used": business_agent.get_available_tools(),
+                "workflow_executed": f"{analysis.get('category', 'general')}_analysis"
+            },
             "sessionId": session_id,
             "timestamp": int(time.time())
         }
         
     except Exception as e:
-        logger.error(f"Error in sophisticated analysis: {e}")
+        logger.error(f"Error in unified analysis: {e}")
         raise HTTPException(
             status_code=500,
             detail={
-                'error': 'Sophisticated analysis failed',
+                'error': 'Unified analysis failed',
                 'sessionId': session_id,
                 'message': str(e)
             }
@@ -345,19 +352,29 @@ async def generate_insights(request: PromptRequest):
 async def root():
     """Health check endpoint with capabilities overview"""
     return {
-        "message": "PeppaSync LangChain API",
-        "version": "2.0.0",
+        "message": "PeppaSync LangChain API - Unified Agent Architecture",
+        "version": "2.1.0",
         "status": "running",
+        "architecture": {
+            "type": "Unified Business Agent",
+            "description": "Single intelligent agent with modular tools",
+            "benefits": ["Reduced redundancy", "Consistent responses", "Easier maintenance"]
+        },
         "capabilities": {
             "conversational_bi": "Context-aware business intelligence chat",
-            "advanced_analytics": "6 types of business analysis", 
-            "autonomous_agents": "Inventory & marketing optimization",
+            "unified_analytics": "Single agent for all business analysis types", 
+            "modular_tools": "Reusable tools for database, insights, alerts, recommendations",
             "sophisticated_prompts": "100+ retail scenario prompts supported",
             "market_specialization": "Nigerian retail market focus"
         },
-        "new_endpoints": {
+        "available_tools": business_agent.get_available_tools(),
+        "available_workflows": business_agent.get_available_workflows(),
+        "endpoints": {
+            "/chat": "Enhanced conversational BI with unified agent",
+            "/analytics/{type}": "Business analytics using unified workflows",
+            "/agents/inventory/run": "Inventory monitoring and alerts",
+            "/agents/marketing/run": "Marketing optimization and ROAS analysis",
             "/analyze-prompt": "Analyze and classify business prompts",
-            "/prompt-capabilities": "Get supported categories and samples", 
             "/sophisticated-analysis": "Advanced retail business analysis"
         },
         "timestamp": int(time.time())

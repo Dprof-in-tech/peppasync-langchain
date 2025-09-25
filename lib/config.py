@@ -17,11 +17,14 @@ logger = logging.getLogger(__name__)
 
 class AppConfig:
     """Centralized application configuration"""
-    
+
     # API Keys
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-    
-    # Database Configuration
+
+    # NeonDB/Postgres Database Configuration
+    DATABASE_URL = os.getenv('DATABASE_URL')  # Example: postgresql+psycopg2://<user>:<password>@<host>/<db>
+
+    # For backwards compatibility (if DATABASE_URL is not present, fallback to these):
     DATABASE_CONFIG = {
         'host': os.getenv('DATABASE_HOST', 'localhost'),
         'port': os.getenv('DATABASE_PORT', '5432'),
@@ -29,14 +32,14 @@ class AppConfig:
         'user': os.getenv('DATABASE_USER', 'postgres'),
         'password': os.getenv('DATABASE_PASSWORD', '')
     }
-    
+
     # LLM Configuration
     LLM_CONFIG = {
         'model': 'gpt-4o-mini',
         'temperature': 0.1,
         'max_tokens': 2000
     }
-    
+
     # Nigerian Market Context
     NIGERIAN_MARKET_CONTEXT = {
         'currency': 'NGN',
@@ -57,24 +60,27 @@ class AppConfig:
             'competition_level': 'high'
         }
     }
-    
+
     # Vector Store Configuration
     VECTOR_STORE_PATH = './vector_store'
-    
+
     @classmethod
     def validate_config(cls) -> bool:
         """Validate that all required configuration is present"""
         if not cls.OPENAI_API_KEY:
             logger.error("OPENAI_API_KEY is not set")
             return False
+        if not cls.DATABASE_URL:
+            logger.error("DATABASE_URL (NeonDB/Postgres) is not set")
+            return False
         return True
 
 class LLMManager:
     """Singleton manager for LLM instances"""
-    
+
     _chat_llm_instance = None
     _embeddings_instance = None
-    
+
     @classmethod
     def get_chat_llm(cls, **kwargs) -> ChatOpenAI:
         """Get shared ChatOpenAI instance"""
@@ -88,7 +94,7 @@ class LLMManager:
                 api_key=AppConfig.OPENAI_API_KEY
             )
         return cls._chat_llm_instance
-    
+
     @classmethod
     def get_embeddings(cls) -> OpenAIEmbeddings:
         """Get shared OpenAI embeddings instance"""
@@ -97,7 +103,7 @@ class LLMManager:
                 api_key=AppConfig.OPENAI_API_KEY
             )
         return cls._embeddings_instance
-    
+
     @classmethod
     def reset_instances(cls):
         """Reset instances (useful for testing)"""
@@ -106,13 +112,16 @@ class LLMManager:
 
 class DatabaseManager:
     """Database connection manager"""
-    
+
     @staticmethod
     def get_connection_string() -> str:
-        """Get PostgreSQL connection string"""
+        """Get NeonDB/Postgres connection string"""
+        # Prefer DATABASE_URL (NeonDB); fallback to manual config
+        if AppConfig.DATABASE_URL:
+            return AppConfig.DATABASE_URL
         config = AppConfig.DATABASE_CONFIG
         return f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}"
-    
+
     @staticmethod
     def get_mock_data() -> Dict[str, Any]:
         """Get mock data for development/testing"""

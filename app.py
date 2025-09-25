@@ -18,6 +18,10 @@ from lib.prompt_engine import PeppaPromptEngine
 from lib.config import AppConfig, LLMManager
 from lib.tool_registry import ToolRegistry
 
+# Import the new database components and user router
+from lib.db.database import Base, engine # Base and engine are needed for table creation
+from lib.api.routes.user import user_router
+
 # Load environment variables
 load_dotenv()
 
@@ -30,7 +34,7 @@ if not AppConfig.validate_config():
     logger.error("Configuration validation failed. Please check your environment variables.")
     exit(1)
 
-# Environment variables from config
+# Environment variables from config (this line is technically not needed here anymore as AppConfig.DATABASE_URL is preferred)
 database_config = AppConfig.DATABASE_CONFIG
 
 app = FastAPI(title="PeppaSync LangChain", version="1.0.0")
@@ -50,7 +54,14 @@ conversation_manager = ConversationManager()
 business_agent = UnifiedBusinessAgent()
 prompt_engine = PeppaPromptEngine()
 
-# Pydantic models
+# Create database tables if they don't exist
+# This is for initial setup during development. In production, use Alembic migrations.
+Base.metadata.create_all(bind=engine)
+
+# Include the new user authentication router
+app.include_router(user_router, prefix="/auth", tags=["Authentication"])
+
+# Pydantic models (existing ones from app.py)
 class ChatRequest(BaseModel):
     prompt: str
     session_id: Optional[str] = None
@@ -77,10 +88,10 @@ async def enhanced_chat(request: ChatRequest):
     try:
         # Use conversation manager for contextual responses
         result = await conversation_manager.process_conversation(request.prompt, session_id)
-        
+
         logger.info(f"Enhanced chat response for session: {session_id}")
         return result
-        
+
     except Exception as e:
         logger.error(f"Error in enhanced chat: {e}")
         raise HTTPException(
@@ -106,18 +117,18 @@ async def run_analytics(analysis_type: str, request: AnalyticsRequest):
             "revenue_trends": "sales_revenue",
             "product_performance": "sales_revenue"
         }
-        
+
         business_category = category_mapping.get(analysis_type, "general_analysis")
-        
+
         result = await business_agent.analyze(
             query=f"Analyze {analysis_type} for business insights",
             business_category=business_category,
             analysis_type="descriptive"
         )
-        
+
         logger.info(f"Analytics executed: {analysis_type}")
         return result
-        
+
     except Exception as e:
         logger.error(f"Error in analytics endpoint: {e}")
         raise HTTPException(
@@ -138,10 +149,10 @@ async def run_inventory_agent():
             business_category="inventory_operations",
             analysis_type="diagnostic"
         )
-        
+
         logger.info(f"Inventory analysis executed: {result.get('status')}")
         return result
-        
+
     except Exception as e:
         logger.error(f"Error running inventory analysis: {e}")
         raise HTTPException(
@@ -163,10 +174,10 @@ async def run_marketing_agent():
             business_category="marketing_customer",
             analysis_type="prescriptive"
         )
-        
+
         logger.info(f"Marketing analysis executed: {result.get('status')}")
         return result
-        
+
     except Exception as e:
         logger.error(f"Error running marketing analysis: {e}")
         raise HTTPException(
@@ -185,15 +196,15 @@ async def _analyze_business_prompt_internal(prompt: str):
     """Internal function to analyze and classify business intelligence prompts"""
     try:
         analysis = await prompt_engine.analyze_prompt(prompt)
-        
+
         # Generate sophisticated response if it's a complex business query
         if analysis.get('confidence', 0) > 0.6:
             sophisticated_response = await prompt_engine.generate_sophisticated_response(analysis)
             analysis['generated_response'] = sophisticated_response
-        
+
         logger.info(f"Analyzed prompt: {analysis.get('category')} - {analysis.get('analysis_type')}")
         return analysis
-        
+
     except Exception as e:
         logger.error(f"Error analyzing prompt: {e}")
         return {
@@ -210,17 +221,17 @@ async def get_prompt_capabilities():
     """Get supported business intelligence categories and sample questions"""
     try:
         capabilities = prompt_engine.get_supported_categories()
-        
+
         return {
             "supported_categories": capabilities,
             "total_categories": len(capabilities),
             "analysis_types": [
-                "predictive", "scenario", "diagnostic", 
+                "predictive", "scenario", "diagnostic",
                 "prescriptive", "comparative", "descriptive"
             ],
             "specializations": [
                 "Nigerian retail market",
-                "Sales forecasting", 
+                "Sales forecasting",
                 "Marketing optimization",
                 "Inventory management",
                 "Customer analytics",
@@ -228,7 +239,7 @@ async def get_prompt_capabilities():
             ],
             "timestamp": int(time.time())
         }
-        
+
     except Exception as e:
         logger.error(f"Error getting capabilities: {e}")
         raise HTTPException(
@@ -241,18 +252,18 @@ async def get_prompt_capabilities():
 async def unified_business_analysis(request: ChatRequest):
     """New unified business analysis endpoint showcasing the refactored architecture"""
     session_id = request.session_id or str(uuid.uuid4())
-    
+
     try:
         # First classify the prompt using internal function
         analysis = await _analyze_business_prompt_internal(request.prompt)
-        
+
         # Use unified business agent for comprehensive analysis
         business_result = await business_agent.analyze(
             query=request.prompt,
             business_category=analysis.get('category', 'general_analysis'),
             analysis_type=analysis.get('analysis_type', 'descriptive')
         )
-        
+
         return {
             "unified_analysis": {
                 "status": business_result.get("status"),
@@ -276,7 +287,7 @@ async def unified_business_analysis(request: ChatRequest):
             "sessionId": session_id,
             "timestamp": int(time.time())
         }
-        
+
     except Exception as e:
         logger.error(f"Error in unified analysis: {e}")
         raise HTTPException(
@@ -294,7 +305,7 @@ async def clear_conversation_session(session_id: str):
     """Clear a conversation session"""
     try:
         success = await conversation_manager.clear_session(session_id)
-        
+
         if success:
             return {'message': f'Session {session_id} cleared successfully'}
         else:
@@ -302,7 +313,7 @@ async def clear_conversation_session(session_id: str):
                 status_code=404,
                 detail={'message': f'Session {session_id} not found or already cleared'}
             )
-            
+
     except Exception as e:
         logger.error(f"Error clearing session: {e}")
         raise HTTPException(
@@ -318,10 +329,10 @@ async def create_visuals(request: PromptRequest):
     try:
         response = await genbiapp.retrieve_and_visualize(request.prompt)
         resp = {"user": response}
-        
+
         logger.info(f"Response from retrieve_and_visualize: {len(str(response))} chars")
         return resp
-        
+
     except Exception as e:
         logger.error(f"Error in retrieve_and_visualize: {e}")
         raise HTTPException(
@@ -339,7 +350,7 @@ async def generate_insights(request: PromptRequest):
 
         logger.info(f"Response from retrieve_and_generate: session {request.session_id}")
         return response
-        
+
     except Exception as e:
         logger.error(f"Error in retrieve_and_generate: {e}")
         raise HTTPException(
@@ -362,7 +373,7 @@ async def root():
         },
         "capabilities": {
             "conversational_bi": "Context-aware business intelligence chat",
-            "unified_analytics": "Single agent for all business analysis types", 
+            "unified_analytics": "Single agent for all business analysis types",
             "modular_tools": "Reusable tools for database, insights, alerts, recommendations",
             "sophisticated_prompts": "100+ retail scenario prompts supported",
             "market_specialization": "Nigerian retail market focus"
@@ -375,7 +386,10 @@ async def root():
             "/agents/inventory/run": "Inventory monitoring and alerts",
             "/agents/marketing/run": "Marketing optimization and ROAS analysis",
             "/analyze-prompt": "Analyze and classify business prompts",
-            "/sophisticated-analysis": "Advanced retail business analysis"
+            "/sophisticated-analysis": "Advanced retail business analysis",
+            "/auth/signup": "Register a new user and send OTP",
+            "/auth/verify-otp": "Verify OTP for user registration",
+            "/auth/login": "Login user after email verification"
         },
         "timestamp": int(time.time())
     }

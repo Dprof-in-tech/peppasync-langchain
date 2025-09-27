@@ -5,14 +5,16 @@ import logging
 from typing import Dict, List, Any, Optional
 from langchain.schema import HumanMessage, SystemMessage
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import CSVLoader
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
+from langchain.docstore.document import Document
 import pandas as pd
-from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
+import numpy as np
+import uuid
+import json
 
 # Import centralized configuration
 from .config import LLMManager, AppConfig, DatabaseManager
@@ -28,35 +30,98 @@ class GenBISQL:
         self.llm = LLMManager.get_chat_llm()
         self.embeddings = LLMManager.get_embeddings()
         self.vector_store = None
+
         # Database configuration (using mock data for now)
         self.database_config = AppConfig.DATABASE_CONFIG
         self.use_mock_data = True
-        
-        # Initialize and load the vector store
+
+        # Initialize Pinecone vector store
         self._initialize_vector_store()
 
     def _initialize_vector_store(self):
-        """Initialize or load the vector store with business knowledge"""
+        """Initialize vector store with Pinecone"""
         try:
-            # Try to load existing vector store
-            if os.path.exists("./vector_store"):
-                self.vector_store = FAISS.load_local(
-                    "./vector_store", 
-                    self.embeddings,
-                    allow_dangerous_deserialization=True
-                )
-                logger.info("Loaded existing vector store")
+            if AppConfig.PINECONE_API_KEY:
+                logger.info("Initializing Pinecone Vector Store")
+                self._init_pinecone_vector_store()
             else:
-                # Create new vector store from sample data
-                self._create_vector_store()
+                logger.warning("Pinecone Vector Store not configured. Vector search will be disabled.")
+                self.vector_store = None
+
         except Exception as e:
             logger.error(f"Error initializing vector store: {e}")
-            self._create_vector_store()
+            self.vector_store = None
 
-    def _create_vector_store(self):
-        """Create vector store with sample business knowledge"""
+    def _init_pinecone_vector_store(self):
+        """Initialize Pinecone vector store"""
         try:
-            # Sample business knowledge documents
+            from pinecone import Pinecone
+            from langchain_pinecone import PineconeVectorStore
+
+            # Initialize Pinecone client
+            pc = Pinecone(api_key=AppConfig.PINECONE_API_KEY)
+
+            # Check if index exists, handle dimension mismatch
+            index_name = AppConfig.PINECONE_INDEX_NAME
+            existing_indexes = pc.list_indexes()
+
+            index_exists = index_name in [index.name for index in existing_indexes]
+
+            if index_exists:
+                # Check if dimensions match
+                index_info = pc.describe_index(index_name)
+                existing_dimension = index_info['dimension']
+
+                if existing_dimension != AppConfig.VECTOR_DIMENSION:
+                    logger.warning(f"Index {index_name} has dimension {existing_dimension}, expected {AppConfig.VECTOR_DIMENSION}")
+                    # Delete and recreate with correct dimensions
+                    logger.info(f"Deleting existing index: {index_name}")
+                    pc.delete_index(index_name)
+                    index_exists = False
+
+            if not index_exists:
+                logger.info(f"Creating Pinecone index: {index_name} with dimension {AppConfig.VECTOR_DIMENSION}")
+                pc.create_index(
+                    name=index_name,
+                    dimension=AppConfig.VECTOR_DIMENSION,
+                    metric="cosine",
+                    spec={
+                        "serverless": {
+                            "cloud": "aws",
+                            "region": "us-east-1"
+                        }
+                    }
+                )
+                # Wait for index to be ready
+                import time
+                time.sleep(5)
+
+            # Initialize the vector store
+            self.vector_store = PineconeVectorStore(
+                index_name=index_name,
+                embedding=self.embeddings,
+                pinecone_api_key=AppConfig.PINECONE_API_KEY
+            )
+
+            # Check if we need to populate with initial data
+            index = pc.Index(index_name)
+            stats = index.describe_index_stats()
+
+            if stats['total_vector_count'] == 0:
+                logger.info("Pinecone index is empty, populating with initial data")
+                self._populate_pinecone_with_business_data()
+            else:
+                logger.info(f"Pinecone index loaded with {stats['total_vector_count']} vectors")
+
+            logger.info("Pinecone Vector Store initialized successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize Pinecone vector store: {e}")
+            raise
+
+    def _populate_pinecone_with_business_data(self):
+        """Populate Pinecone with business knowledge documents"""
+        try:
             business_docs = [
                 "The company sells consumer electronics, fashion items, and home goods. Main product categories include smartphones, laptops, clothing, and furniture.",
                 "Sales data shows seasonal patterns with peaks in Q4 (holiday season) and Q2 (summer season). Fashion items peak in spring and fall.",
@@ -67,23 +132,46 @@ class GenBISQL:
                 "Database schema includes tables: products, sales, customers, marketing_campaigns, inventory_levels, suppliers.",
                 "Revenue is tracked in Nigerian Naira (₦). Exchange rate fluctuations affect international supplier costs.",
                 "Top performing product categories by revenue: Electronics (40%), Fashion (35%), Home & Garden (15%), Sports & Outdoors (10%).",
-                "Customer satisfaction scores average 4.2/5. Main complaints relate to delivery times and product availability."
+                "Customer satisfaction scores average 4.2/5. Main complaints relate to delivery times and product availability.",
+                "Nigerian retail market characteristics: High mobile commerce usage, preference for cash payments, social media influence on purchases.",
+                "Supply chain considerations: Import duties, currency fluctuations, local sourcing opportunities, regional distribution centers.",
+                "Seasonal business factors: Ramadan shopping patterns, back-to-school season, Christmas and New Year sales peaks.",
+                "Common business challenges: Inventory stockouts, payment processing, logistics costs, competition from international platforms.",
+                "Successful marketing strategies: Influencer partnerships, social media advertising, referral programs, loyalty schemes."
             ]
-            
-            from langchain.docstore.document import Document
-            
-            documents = [Document(page_content=doc) for doc in business_docs]
-            
-            # Create embeddings and vector store
-            self.vector_store = FAISS.from_documents(documents, self.embeddings)
-            
-            # Save vector store
-            self.vector_store.save_local("./vector_store")
-            logger.info("Created and saved new vector store")
-            
+
+            metadatas = [
+                {"category": "products", "type": "overview"},
+                {"category": "sales", "type": "patterns"},
+                {"category": "customers", "type": "demographics"},
+                {"category": "marketing", "type": "campaigns"},
+                {"category": "inventory", "type": "management"},
+                {"category": "metrics", "type": "kpis"},
+                {"category": "database", "type": "schema"},
+                {"category": "finance", "type": "currency"},
+                {"category": "revenue", "type": "breakdown"},
+                {"category": "satisfaction", "type": "feedback"},
+                {"category": "market", "type": "characteristics"},
+                {"category": "supply_chain", "type": "considerations"},
+                {"category": "seasonal", "type": "patterns"},
+                {"category": "challenges", "type": "business"},
+                {"category": "strategies", "type": "marketing"}
+            ]
+
+            # Create Document objects
+            documents = []
+            for doc, metadata in zip(business_docs, metadatas):
+                documents.append(Document(page_content=doc, metadata=metadata))
+
+            # Add documents to Pinecone
+            self.vector_store.add_documents(documents)
+            logger.info(f"Populated Pinecone with {len(business_docs)} business knowledge documents")
+
         except Exception as e:
-            logger.error(f"Error creating vector store: {e}")
-            self.vector_store = None
+            logger.error(f"Error populating Pinecone with business data: {e}")
+            raise
+
+
 
     def _extract_json(self, text):
         """Extract and parse JSON from text response"""
@@ -174,12 +262,13 @@ class GenBISQL:
             relevant_data = []
             
             if self.vector_store:
-                # Get relevant documents from vector store
+                # Get relevant documents from Pinecone vector store
                 docs = self.vector_store.similarity_search(query, k=limit)
                 for doc in docs:
                     relevant_data.append({
                         "type": "knowledge",
-                        "content": doc.page_content
+                        "content": doc.page_content,
+                        "metadata": getattr(doc, 'metadata', {})
                     })
             
             # Try to get actual database data (mock for now)
@@ -194,50 +283,28 @@ class GenBISQL:
             return []
 
     async def _get_database_data(self, query: str) -> List[Dict]:
-        """Get relevant data from database (mock implementation)"""
+        """Get relevant data from database - falls back to mock if no connection"""
         try:
-            # Mock data - in production, this would query actual database
-            mock_data = [
-                {
-                    "type": "sales_data",
-                    "product_name": "iPhone 15",
-                    "sales_amount": 150000,
-                    "units_sold": 50,
-                    "category": "Electronics",
-                    "date": "2024-01-15"
-                },
-                {
-                    "type": "sales_data", 
-                    "product_name": "Samsung Galaxy S24",
-                    "sales_amount": 120000,
-                    "units_sold": 40,
-                    "category": "Electronics",
-                    "date": "2024-01-15"
-                },
-                {
-                    "type": "inventory_data",
-                    "product_name": "iPhone 15",
-                    "current_stock": 25,
-                    "reorder_level": 20,
-                    "category": "Electronics"
-                }
-            ]
-            
-            # Filter mock data based on query relevance
-            relevant_data = []
+            # Determine query type from the query
             query_lower = query.lower()
-            
-            for item in mock_data:
-                if any(word in query_lower for word in ["sales", "revenue", "product", "electronics", "iphone", "samsung"]):
-                    relevant_data.append(item)
-            
-            return relevant_data[:5]  # Limit to 5 items
-            
+            query_type = "general"
+
+            if any(word in query_lower for word in ["sales", "revenue", "sold"]):
+                query_type = "sales_data"
+            elif any(word in query_lower for word in ["inventory", "stock", "available"]):
+                query_type = "inventory_data"
+            elif any(word in query_lower for word in ["customer", "demographic", "user"]):
+                query_type = "customer_data"
+
+            # Use DatabaseManager to get data (will fallback to mock if no connection)
+            data = DatabaseManager.get_data(session_id=None, query_type=query_type, use_mock=True)
+            return data
+
         except Exception as e:
             logger.error(f"Error getting database data: {e}")
             return []
 
-    async def retrieve_and_generate(self, query: str, session_id: str = None) -> Dict[str, Any]:
+    async def retrieve_and_generate(self, query: str) -> Dict[str, Any]:
         """Main retrieve and generate function using LangChain"""
         try:
             # Step 1: Retrieve relevant data
@@ -276,7 +343,6 @@ Response:
             
             return {
                 'output': response,
-                'sessionId': session_id or 'default',
                 'citations': retrieved_data
             }
             
@@ -284,7 +350,6 @@ Response:
             logger.error(f"Error in retrieve_and_generate: {e}")
             return {
                 'output': f"I encountered an error processing your request: {str(e)}",
-                'sessionId': session_id or 'default',
                 'citations': []
             }
 

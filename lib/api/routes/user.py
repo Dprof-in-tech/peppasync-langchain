@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 
-from db.schemas import UserCreate # Import UserCreate
-from auth.signup import create_user_with_otp, verify_user_otp, check_user_can_login # Updated import
-from db.database import get_db
+from ...db.schemas import UserCreate # Import UserCreate
+from ...auth.signup import create_user_with_otp, verify_user_otp, check_user_can_login # Updated import
+from ...db.database import get_db
 
 user_router = APIRouter()
 

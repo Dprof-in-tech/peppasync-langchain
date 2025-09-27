@@ -15,7 +15,7 @@ from lib.utils.utils import parse_api_response
 from lib.conversation_manager import ConversationManager
 from lib.agent import UnifiedBusinessAgent
 from lib.prompt_engine import PeppaPromptEngine
-from lib.config import AppConfig, LLMManager
+from lib.config import AppConfig, LLMManager, DatabaseManager
 from lib.tool_registry import ToolRegistry
 
 # Import the new database components and user router
@@ -71,13 +71,19 @@ class AnalyticsRequest(BaseModel):
 
 class PromptRequest(BaseModel):
     prompt: str
-    session_id: Optional[str] = None
 
 class AdvancedAnalysisRequest(BaseModel):
     prompt: str
     session_id: Optional[str] = None
     include_forecasting: Optional[bool] = True
     include_scenarios: Optional[bool] = True
+
+class DatabaseConnectionRequest(BaseModel):
+    database_url: str
+    session_id: Optional[str] = None
+
+class DatabaseTestRequest(BaseModel):
+    database_url: str
 
 
 @app.post("/chat")
@@ -322,6 +328,178 @@ async def clear_conversation_session(session_id: str):
         )
 
 
+@app.post("/database/test")
+async def test_database_connection(request: DatabaseTestRequest):
+    """Test a PostgreSQL database connection"""
+    try:
+        result = DatabaseManager.test_database_connection(request.database_url)
+
+        if result["success"]:
+            logger.info(f"Database connection test successful: {result['database_name']}")
+            return {
+                "status": "success",
+                "message": result["message"],
+                "database_info": {
+                    "database_name": result["database_name"],
+                    "host": result["host"],
+                    "available_tables": result["available_tables"],
+                    "detected_data_types": result["detected_data_types"],
+                    "table_count": len(result["available_tables"])
+                },
+                "table_details": result["table_info"]
+            }
+        else:
+            logger.error(f"Database connection test failed: {result['message']}")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "status": "error",
+                    "message": result["message"],
+                    "error": result.get("error", "Unknown error")
+                }
+            )
+
+    except Exception as e:
+        logger.error(f"Error testing database connection: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "message": "Database connection test failed",
+                "error": str(e)
+            }
+        )
+
+
+@app.post("/database/connect")
+async def connect_database(request: DatabaseConnectionRequest):
+    """Connect a PostgreSQL database to a session"""
+    session_id = request.session_id or str(uuid.uuid4())
+
+    try:
+        # First test the connection
+        test_result = DatabaseManager.test_database_connection(request.database_url)
+
+        if not test_result["success"]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "status": "error",
+                    "message": f"Database connection failed: {test_result['message']}",
+                    "session_id": session_id
+                }
+            )
+
+        # Store the connection information
+        connection_info = {
+            "database_url": request.database_url,
+            "connected_at": int(time.time()),
+            "database_name": test_result["database_name"],
+            "host": test_result["host"],
+            "available_tables": test_result["available_tables"],
+            "detected_data_types": test_result["detected_data_types"],
+            "table_info": test_result["table_info"]
+        }
+
+        DatabaseManager.set_user_connection(session_id, connection_info)
+
+        logger.info(f"Database connected for session {session_id}: {test_result['database_name']}")
+
+        return {
+            "status": "success",
+            "message": "Database connected successfully",
+            "session_id": session_id,
+            "database_info": {
+                "database_name": test_result["database_name"],
+                "host": test_result["host"],
+                "available_tables": test_result["available_tables"],
+                "detected_data_types": test_result["detected_data_types"],
+                "table_count": len(test_result["available_tables"])
+            },
+            "next_steps": [
+                "You can now ask questions about your business data",
+                "The system will automatically query your database for relevant information",
+                f"Available data types: {', '.join(test_result['detected_data_types'])}"
+            ]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error connecting database: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "message": "Failed to connect database",
+                "session_id": session_id,
+                "error": str(e)
+            }
+        )
+
+
+@app.get("/database/status/{session_id}")
+async def get_database_status(session_id: str):
+    """Get database connection status for a session"""
+    try:
+        if DatabaseManager.has_user_connection(session_id):
+            connection_info = DatabaseManager.get_user_connection(session_id)
+            return {
+                "status": "connected",
+                "database_name": connection_info.get("database_name", "Unknown"),
+                "host": connection_info.get("host", "Unknown"),
+                "connected_at": connection_info.get("connected_at"),
+                "available_tables": connection_info.get("available_tables", []),
+                "detected_data_types": connection_info.get("detected_data_types", []),
+                "table_count": len(connection_info.get("available_tables", []))
+            }
+        else:
+            return {
+                "status": "not_connected",
+                "message": "No database connection found for this session"
+            }
+
+    except Exception as e:
+        logger.error(f"Error getting database status: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "message": "Failed to get database status",
+                "error": str(e)
+            }
+        )
+
+
+@app.delete("/database/disconnect/{session_id}")
+async def disconnect_database(session_id: str):
+    """Disconnect database for a session"""
+    try:
+        if DatabaseManager.has_user_connection(session_id):
+            DatabaseManager.remove_user_connection(session_id)
+            logger.info(f"Database disconnected for session {session_id}")
+            return {
+                "status": "success",
+                "message": f"Database disconnected for session {session_id}"
+            }
+        else:
+            return {
+                "status": "not_connected",
+                "message": "No database connection found for this session"
+            }
+
+    except Exception as e:
+        logger.error(f"Error disconnecting database: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "message": "Failed to disconnect database",
+                "error": str(e)
+            }
+        )
+
+
 # Keep original endpoints for backward compatibility
 @app.post("/retrieve_and_visualize")
 async def create_visuals(request: PromptRequest):
@@ -345,10 +523,10 @@ async def create_visuals(request: PromptRequest):
 async def generate_insights(request: PromptRequest):
     """Original insights endpoint - maintained for backward compatibility"""
     try:
-        insight = await genbiapp.retrieve_and_generate(request.prompt, request.session_id)
+        insight = await genbiapp.retrieve_and_generate(request.prompt)
         response = {"user": insight}
 
-        logger.info(f"Response from retrieve_and_generate: session {request.session_id}")
+        logger.info(f"Response from retrieve_and_generate: {len(str(insight))} chars")
         return response
 
     except Exception as e:
@@ -385,8 +563,10 @@ async def root():
             "/analytics/{type}": "Business analytics using unified workflows",
             "/agents/inventory/run": "Inventory monitoring and alerts",
             "/agents/marketing/run": "Marketing optimization and ROAS analysis",
-            "/analyze-prompt": "Analyze and classify business prompts",
-            "/sophisticated-analysis": "Advanced retail business analysis",
+            "/database/test": "Test PostgreSQL database connection",
+            "/database/connect": "Connect PostgreSQL database to session",
+            "/database/status/{session_id}": "Get database connection status",
+            "/database/disconnect/{session_id}": "Disconnect database from session",
             "/auth/signup": "Register a new user and send OTP",
             "/auth/verify-otp": "Verify OTP for user registration",
             "/auth/login": "Login user after email verification"

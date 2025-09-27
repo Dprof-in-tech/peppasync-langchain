@@ -13,9 +13,11 @@ from pydantic import BaseModel, Field
 import asyncio
 from dotenv import load_dotenv
 from .prompt_engine import PeppaPromptEngine
-from .config import LLMManager
+from .config import LLMManager, DatabaseManager
 from .utils.common import ValidationUtils, LoggingUtils, ResponseFormatter
 from .agent import UnifiedBusinessAgent
+from .query_classifier import QueryClassifier
+from .database_connection_manager import DatabaseConnectionManager, ConnectionStatus
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -36,22 +38,32 @@ class ConversationState(BaseModel):
     business_category: str = ""
     analysis_type: str = ""
     requires_advanced_analysis: bool = False
+    # Query classification fields
+    query_classification: Dict[str, Any] = Field(default_factory=dict)
+    needs_data: bool = False
+    data_requirements: List[str] = Field(default_factory=list)
+    can_answer_without_data: bool = True
+    response_strategy: str = "provide_general_advice"
 
 class ConversationManager:
     """LangGraph-powered conversation manager for contextual RAG"""
     
     def __init__(self):
         self.llm = LLMManager.get_chat_llm()
-        
+
         # Initialize advanced prompt engine
         self.prompt_engine = PeppaPromptEngine()
-        
+
         # Initialize unified business agent
         self.business_agent = UnifiedBusinessAgent()
-        
+
+        # Initialize query classifier and database connection manager
+        self.query_classifier = QueryClassifier()
+        self.db_connection_manager = DatabaseConnectionManager()
+
         # In-memory session storage (in production, use Redis or database)
         self.sessions: Dict[str, Dict] = {}
-        
+
         # Build the LangGraph workflow
         self.workflow = self._build_conversation_graph()
 
@@ -63,15 +75,17 @@ class ConversationManager:
         
         # Add nodes for conversation flow
         workflow.add_node("analyze_query", self._analyze_query_node)
+        workflow.add_node("classify_query_needs", self._classify_query_needs_node)
         workflow.add_node("classify_prompt", self._classify_prompt_node)
         workflow.add_node("load_context", self._load_context_node)
         workflow.add_node("enhance_query", self._enhance_query_node)
         workflow.add_node("generate_response", self._generate_response_node)
         workflow.add_node("save_session", self._save_session_node)
-        
+
         # Set entry point and edges
         workflow.set_entry_point("analyze_query")
-        workflow.add_edge("analyze_query", "classify_prompt")
+        workflow.add_edge("analyze_query", "classify_query_needs")
+        workflow.add_edge("classify_query_needs", "classify_prompt")
         workflow.add_edge("classify_prompt", "load_context")
         workflow.add_edge("load_context", "enhance_query")
         workflow.add_edge("enhance_query", "generate_response")
@@ -122,6 +136,33 @@ class ConversationManager:
             logger.error(f"Error in analyze_query_node: {e}")
             state.error = f"Query analysis failed: {str(e)}"
         
+        return state
+
+    async def _classify_query_needs_node(self, state: ConversationState) -> ConversationState:
+        """Classify if query needs database context or can be answered with general advice"""
+        try:
+            logger.info(f"Classifying query needs for: {state.query[:100]}...")
+
+            # Use query classifier to determine data needs
+            classification = await self.query_classifier.classify_query(state.query)
+
+            # Update state with classification results
+            state.query_classification = classification
+            state.needs_data = classification.get("needs_data", False)
+            state.data_requirements = classification.get("data_requirements", [])
+            state.can_answer_without_data = classification.get("can_answer_without_data", True)
+            state.response_strategy = classification.get("response_strategy", "provide_general_advice")
+
+            logger.info(f"Query classified: needs_data={state.needs_data}, strategy={state.response_strategy}")
+
+        except Exception as e:
+            logger.error(f"Error in classify_query_needs_node: {e}")
+            state.error = f"Query classification failed: {str(e)}"
+            # Default to general advice on error
+            state.needs_data = False
+            state.can_answer_without_data = True
+            state.response_strategy = "provide_general_advice"
+
         return state
 
     async def _classify_prompt_node(self, state: ConversationState) -> ConversationState:
@@ -215,45 +256,71 @@ Please answer the current question considering the conversation context where re
         return state
 
     async def _generate_response_node(self, state: ConversationState) -> ConversationState:
-        """Generate response using UnifiedBusinessAgent"""
+        """Generate response based on query classification and data availability"""
         try:
-            # Check if we need advanced business analysis
-            if state.requires_advanced_analysis and state.prompt_analysis:
-                logger.info(f"Using unified agent for {state.business_category} query")
-                
-                # Use unified business agent for comprehensive analysis
+            # Check if user needs specific data but doesn't have it connected
+            if state.needs_data and not DatabaseManager.has_user_connection(state.session_id):
+                logger.info("Query needs data but no user database connected - requesting connection")
+
+                # Generate database connection request
+                connection_prompt = await self.query_classifier.generate_data_request(
+                    state.query_classification,
+                    state.query
+                )
+
+                # Also offer general advice option
+                general_advice = await self.query_classifier.generate_general_advice(
+                    state.query,
+                    state.query_classification
+                )
+
+                state.response = f"{connection_prompt}\n\n---\n\n**Alternative: General Business Advice**\n\n{general_advice}"
+
+            elif state.response_strategy == "provide_general_advice" or state.can_answer_without_data:
+                logger.info("Providing general business advice")
+
+                # Generate general advice without requiring specific data
+                state.response = await self.query_classifier.generate_general_advice(
+                    state.query,
+                    state.query_classification
+                )
+
+            elif state.needs_data and DatabaseManager.has_user_connection(state.session_id):
+                logger.info("User has database connected - using unified agent with user data")
+
+                # Use unified business agent with user's actual data
                 business_result = await self.business_agent.analyze(
                     query=state.query,
                     business_category=state.business_category,
                     analysis_type=state.analysis_type
                 )
-                
+
                 if business_result.get("status") == "success":
                     # Format the business analysis response
                     insights = business_result.get("insights", "")
                     alerts = business_result.get("alerts", [])
                     recommendations = business_result.get("recommendations", [])
-                    
+
                     response_parts = []
-                    
+
                     # Add insights
                     if insights:
                         response_parts.append(f"## Business Analysis:\n{insights}")
-                    
+
                     # Add critical alerts
                     critical_alerts = [a for a in alerts if a.get("priority") == "CRITICAL"]
                     if critical_alerts:
                         response_parts.append("\n## 🚨 Critical Alerts:")
                         for alert in critical_alerts:
                             response_parts.append(f"- {alert.get('message', 'Alert')}")
-                    
+
                     # Add top recommendations
                     high_priority_recs = [r for r in recommendations if r.get("priority") == "HIGH"][:3]
                     if high_priority_recs:
                         response_parts.append("\n## 💡 Key Recommendations:")
                         for rec in high_priority_recs:
                             response_parts.append(f"- {rec.get('action', 'Recommendation')}: {rec.get('details', '')}")
-                    
+
                     # Add summary
                     summary = business_result.get("data_summary", {})
                     if summary:
@@ -262,28 +329,30 @@ Please answer the current question considering the conversation context where re
                         response_parts.append(f"- Recommendations: {summary.get('total_recommendations', 0)}")
                         if summary.get('critical_alerts', 0) > 0:
                             response_parts.append(f"- Critical Issues: {summary.get('critical_alerts', 0)}")
-                    
+
                     state.response = "\n".join(response_parts)
-                    
+
                     # Add analysis metadata
                     state.response += f"\n\n---\n*Analysis Type: {state.analysis_type.title()} | Category: {state.business_category.replace('_', ' ').title()}*"
-                    
+
                 else:
-                    # Fallback to traditional RAG if business analysis fails
-                    logger.warning(f"Business analysis failed, falling back to RAG: {business_result.get('error')}")
-                    await self._fallback_to_rag(state)
-                
-                logger.info(f"Generated unified agent response for {state.business_category} analysis")
-                
+                    # Fallback to general advice if business analysis fails
+                    logger.warning(f"Business analysis failed, providing general advice: {business_result.get('error')}")
+                    state.response = await self.query_classifier.generate_general_advice(
+                        state.query,
+                        state.query_classification
+                    )
+
             else:
-                # Use traditional RAG for simpler queries
+                # Fallback to traditional RAG for edge cases
+                logger.info("Using traditional RAG fallback")
                 await self._fallback_to_rag(state)
-                    
+
         except Exception as e:
             logger.error(f"Error in generate_response_node: {e}")
             state.error = f"Response generation failed: {str(e)}"
             state.response = "I encountered an error generating a response. Please try rephrasing your question."
-            
+
         return state
 
     async def _fallback_to_rag(self, state: ConversationState):

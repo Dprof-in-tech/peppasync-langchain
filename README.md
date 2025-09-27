@@ -59,7 +59,7 @@ graph LR
 
     subgraph "Processing Layer"
         D[Query Classification]
-        E[DatabaseManager.get_data()]
+        E[DatabaseManager]
         F[Vector Similarity Search]
         G[LLM Processing]
     end

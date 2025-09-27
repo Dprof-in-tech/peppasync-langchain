@@ -65,9 +65,9 @@ graph LR
     end
 
     subgraph "Endpoints"
-        H[/chat - Conversational]
-        I[/retrieve_and_generate - Insights]
-        J[/retrieve_and_visualize - Charts]
+        H[Chat - Conversational]
+        I[Retrieve Generate - Insights]
+        J[Retrieve Visualize - Charts]
     end
 
     A --> F

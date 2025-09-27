@@ -18,6 +18,7 @@ import json
 
 # Import centralized configuration
 from .config import LLMManager, AppConfig, DatabaseManager
+from .business_analyzer import BusinessAnalyzer
 
 load_dotenv()
 # Set up logging
@@ -33,7 +34,7 @@ class GenBISQL:
 
         # Database configuration (using mock data for now)
         self.database_config = AppConfig.DATABASE_CONFIG
-        self.use_mock_data = True
+        self.use_mock_data = False
 
         # Initialize Pinecone vector store
         self._initialize_vector_store()
@@ -171,6 +172,45 @@ class GenBISQL:
             logger.error(f"Error populating Pinecone with business data: {e}")
             raise
 
+    def populate_with_real_business_data(self, database_url: str, session_id: str = None) -> bool:
+        """
+        Populate Pinecone with real business insights from user's database
+        This replaces generic documents with actual business-specific knowledge
+        """
+        try:
+            if not self.vector_store:
+                logger.error("Vector store not initialized")
+                return False
+
+            # Get detected schema info if available
+            table_info = {}
+            if session_id:
+                from .config import DatabaseManager
+                connection_info = DatabaseManager.get_user_connection(session_id)
+                if connection_info:
+                    table_info = connection_info.get('table_info', {})
+
+            # Analyze the user's business data with schema info
+            analyzer = BusinessAnalyzer(database_url, table_info)
+            business_documents = analyzer.analyze_business_data()
+
+            if not business_documents:
+                logger.warning("No business insights could be extracted from database")
+                return False
+
+            # Clear existing documents first (optional - or we could append)
+            # For now, we'll add to existing knowledge base
+
+            # Add real business insights to Pinecone
+            self.vector_store.add_documents(business_documents)
+
+            logger.info(f"Successfully added {len(business_documents)} real business insights to Pinecone")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error populating Pinecone with real business data: {e}")
+            return False
+
 
 
     def _extract_json(self, text):
@@ -256,11 +296,11 @@ class GenBISQL:
             logger.error("Error invoking LLM: %s", str(e))
             return f"Error: {str(e)}"
 
-    async def retrieve_relevant_data(self, query: str, limit: int = 5) -> List[Dict]:
+    async def retrieve_relevant_data(self, query: str, session_id: str = None, limit: int = 5) -> List[Dict]:
         """Retrieve relevant data from vector store and database"""
         try:
             relevant_data = []
-            
+
             if self.vector_store:
                 # Get relevant documents from Pinecone vector store
                 docs = self.vector_store.similarity_search(query, k=limit)
@@ -270,19 +310,19 @@ class GenBISQL:
                         "content": doc.page_content,
                         "metadata": getattr(doc, 'metadata', {})
                     })
-            
-            # Try to get actual database data (mock for now)
-            db_data = await self._get_database_data(query)
+
+            # Try to get actual database data (with session_id)
+            db_data = await self._get_database_data(query, session_id)
             if db_data:
                 relevant_data.extend(db_data)
-            
+
             return relevant_data
             
         except Exception as e:
             logger.error(f"Error retrieving data: {e}")
             return []
 
-    async def _get_database_data(self, query: str) -> List[Dict]:
+    async def _get_database_data(self, query: str, session_id: str = None) -> List[Dict]:
         """Get relevant data from database - falls back to mock if no connection"""
         try:
             # Determine query type from the query
@@ -297,21 +337,22 @@ class GenBISQL:
                 query_type = "customer_data"
 
             # Use DatabaseManager to get data (will fallback to mock if no connection)
-            data = DatabaseManager.get_data(session_id=None, query_type=query_type, use_mock=True)
+            data = DatabaseManager.get_data(session_id=session_id, query_type=query_type, use_mock=False)
             return data
 
         except Exception as e:
             logger.error(f"Error getting database data: {e}")
             return []
 
-    async def retrieve_and_generate(self, query: str) -> Dict[str, Any]:
+    async def retrieve_and_generate(self, query: str, session_id: str = None) -> Dict[str, Any]:
         """Main retrieve and generate function using LangChain"""
         try:
             # Step 1: Retrieve relevant data
-            retrieved_data = await self.retrieve_relevant_data(query)
+            retrieved_data = await self.retrieve_relevant_data(query, session_id)
             
             # Step 2: Format retrieved data for LLM
             context = self._format_retrieved_data(retrieved_data)
+            
             
             # Step 3: Create prompt template
             prompt_template = """
@@ -353,11 +394,11 @@ Response:
                 'citations': []
             }
 
-    async def retrieve_and_visualize(self, prompt: str) -> Dict[str, Any]:
+    async def retrieve_and_visualize(self, prompt: str, session_id: str = None) -> Dict[str, Any]:
         """Generate visualization code and insights"""
         try:
             # Step 1: Get relevant data
-            retrieved_data = await self.retrieve_relevant_data(prompt)
+            retrieved_data = await self.retrieve_relevant_data(prompt, session_id)
             
             # Step 2: Format data for visualization prompt
             data_context = self._format_retrieved_data(retrieved_data)

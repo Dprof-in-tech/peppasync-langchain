@@ -65,12 +65,9 @@ class AppConfig:
         }
     }
 
-    # Vector Store Configuration
-    VECTOR_STORE_PATH = './vector_store'
-
     # Pinecone Vector Store Configuration
     PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
-    PINECONE_INDEX_NAME = os.getenv('PINECONE_INDEX_NAME', 'business-knowledge')
+    PINECONE_INDEX_NAME = os.getenv('PINECONE_INDEX_NAME', 'peppasync')
     USE_PINECONE_VECTOR = os.getenv('USE_PINECONE_VECTOR', 'true').lower() == 'true'
     VECTOR_DIMENSION = int(os.getenv('VECTOR_DIMENSION', '1536'))  # OpenAI embeddings
 
@@ -194,14 +191,14 @@ class DatabaseManager:
                 return []
 
             # Connect to PostgreSQL and query data
-            return cls._query_postgres_database(db_url, query_type)
+            return cls._query_postgres_database(db_url, query_type, session_id)
 
         except Exception as e:
             logger.error(f"Error getting user data: {e}")
             return []
 
     @classmethod
-    def _query_postgres_database(cls, db_url: str, query_type: str) -> List[Dict[str, Any]]:
+    def _query_postgres_database(cls, db_url: str, query_type: str, session_id: str = None) -> List[Dict[str, Any]]:
         """Query PostgreSQL database for specific data type"""
         try:
             # Parse the database URL
@@ -219,8 +216,8 @@ class DatabaseManager:
             # Use RealDictCursor to get results as dictionaries
             cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-            # Define queries for different data types
-            queries = cls._get_data_queries(query_type)
+            # Define queries for different data types using session schema
+            queries = cls._get_data_queries(query_type, session_id)
 
             results = []
             for query in queries:
@@ -247,8 +244,15 @@ class DatabaseManager:
             return []
 
     @classmethod
-    def _get_data_queries(cls, query_type: str) -> List[str]:
-        """Get SQL queries for different data types"""
+    def _get_data_queries(cls, query_type: str, session_id: str = None) -> List[str]:
+        """Get SQL queries for different data types using detected schema"""
+
+        # Try to get the detected schema for this session
+        if session_id and session_id in cls._user_connections:
+            table_info = cls._user_connections[session_id].get('table_info', {})
+            return cls._generate_dynamic_queries(query_type, table_info)
+
+        # Fallback to template queries if no schema detected
 
         # Common table name variations for each data type
         query_templates = {
@@ -449,6 +453,38 @@ class DatabaseManager:
         }
 
         return query_templates.get(query_type, [])
+
+    @classmethod
+    def _generate_dynamic_queries(cls, query_type: str, table_info: Dict) -> List[str]:
+        """Generate SQL queries based on detected database schema"""
+        queries = []
+
+        if query_type == "sales_data":
+            # Look for sales-related tables
+            for table_name, columns in table_info.items():
+                table_lower = table_name.lower()
+                if any(keyword in table_lower for keyword in ['sale', 'order', 'transaction', 'purchase']):
+                    column_names = [col['name'] for col in columns]
+                    query = f"SELECT * FROM {table_name} ORDER BY "
+
+                    # Try to find a date column for ordering
+                    date_cols = [col for col in column_names if any(date_word in col.lower() for date_word in ['date', 'time', 'created', 'updated'])]
+                    if date_cols:
+                        query += f"{date_cols[0]} DESC LIMIT 100"
+                    else:
+                        query += f"{column_names[0]} LIMIT 100"
+
+                    queries.append(query)
+
+        elif query_type == "inventory_data":
+            # Look for inventory-related tables
+            for table_name, columns in table_info.items():
+                table_lower = table_name.lower()
+                if any(keyword in table_lower for keyword in ['inventory', 'stock', 'product']):
+                    query = f"SELECT * FROM {table_name} LIMIT 100"
+                    queries.append(query)
+
+        return queries
 
     @classmethod
     def test_database_connection(cls, db_url: str) -> Dict[str, Any]:

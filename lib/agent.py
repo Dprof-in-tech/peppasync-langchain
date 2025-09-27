@@ -33,10 +33,11 @@ class UnifiedBusinessAgent:
     Uses modular tools that can be composed for different scenarios
     """
     
-    def __init__(self):
+    def __init__(self, session_id: str = None):
         # Initialize all available tools
+        self.session_id = session_id
         self.tools = {
-            "database": DatabaseQueryTool(),
+            "database": DatabaseQueryTool(session_id=session_id),
             "insights": InsightGenerationTool(),
             "alerts": AlertTool(),
             "recommendations": RecommendationTool()

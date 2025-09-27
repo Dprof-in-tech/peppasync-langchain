@@ -10,36 +10,49 @@ class DatabaseQueryTool(BaseTool):
     """Unified database query tool for all business data needs"""
     name: str = "database_query"
     description: str = "Query database for business data (sales, inventory, campaigns, customers)"
+    session_id: Optional[str] = None
 
-class DatabaseQueryTool(BaseTool):
-    """Unified database query tool for all business data needs"""
-    name: str = "database_query"
-    description: str = "Query database for business data (sales, inventory, campaigns, customers)"
+    def __init__(self, session_id: str = None, **kwargs):
+        super().__init__(**kwargs)
+        self.session_id = session_id
 
     def _run(self, query_type: str, filters: Optional[Dict[str, Any]] = None) -> List[Dict]:
         """Execute database query based on type and filters"""
         try:
             filters = filters or {}
-            
-            # Use mock data for now, but this can be easily switched to real DB
-            mock_data = DatabaseManager.get_mock_data()
-            
-            if query_type == "sales_data":
-                return mock_data.get('sales_data', [])
-            elif query_type == "inventory_data":
-                return mock_data.get('inventory_data', [])
-            elif query_type == "campaign_data":
-                return mock_data.get('campaign_data', [])
-            elif query_type == "low_stock_items":
-                inventory = mock_data.get('inventory_data', [])
-                return [item for item in inventory if item['current_stock'] < item['reorder_level']]
+
+            # Use real database data if connected, otherwise fall back to mock
+            data = DatabaseManager.get_data(
+                session_id=self.session_id,
+                query_type=query_type,
+                use_mock=False
+            )
+
+            if query_type == "low_stock_items":
+                # Special case: filter inventory for low stock
+                if query_type != "inventory_data":
+                    inventory_data = DatabaseManager.get_data(
+                        session_id=self.session_id,
+                        query_type="inventory_data",
+                        use_mock=False
+                    )
+                else:
+                    inventory_data = data
+                return [item for item in inventory_data if item.get('current_stock', 0) < item.get('reorder_level', 0)]
             elif query_type == "underperforming_campaigns":
-                campaigns = mock_data.get('campaign_data', [])
-                return [camp for camp in campaigns if camp['roas'] < 2.0]
+                # Special case: filter campaigns for low ROAS
+                if query_type != "campaign_data":
+                    campaign_data = DatabaseManager.get_data(
+                        session_id=self.session_id,
+                        query_type="campaign_data",
+                        use_mock=False
+                    )
+                else:
+                    campaign_data = data
+                return [camp for camp in campaign_data if camp.get('roas', 0) < 2.0]
             else:
-                logger.warning(f"Unknown query type: {query_type}")
-                return []
-                
+                return data
+
         except Exception as e:
             logger.error(f"Database query failed: {e}")
             return [{"error": str(e)}]

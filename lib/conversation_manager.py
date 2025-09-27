@@ -17,7 +17,6 @@ from .config import LLMManager, DatabaseManager
 from .utils.common import ValidationUtils, LoggingUtils, ResponseFormatter
 from .agent import UnifiedBusinessAgent
 from .query_classifier import QueryClassifier
-from .database_connection_manager import DatabaseConnectionManager, ConnectionStatus
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -57,9 +56,8 @@ class ConversationManager:
         # Initialize unified business agent
         self.business_agent = UnifiedBusinessAgent()
 
-        # Initialize query classifier and database connection manager
+        # Initialize query classifier
         self.query_classifier = QueryClassifier()
-        self.db_connection_manager = DatabaseConnectionManager()
 
         # In-memory session storage (in production, use Redis or database)
         self.sessions: Dict[str, Dict] = {}
@@ -289,7 +287,9 @@ Please answer the current question considering the conversation context where re
                 logger.info("User has database connected - using unified agent with user data")
 
                 # Use unified business agent with user's actual data
-                business_result = await self.business_agent.analyze(
+                # Create session-specific business agent with database access
+                session_business_agent = UnifiedBusinessAgent(session_id=state.session_id)
+                business_result = await session_business_agent.analyze(
                     query=state.query,
                     business_category=state.business_category,
                     analysis_type=state.analysis_type

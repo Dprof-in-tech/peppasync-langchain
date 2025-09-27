@@ -403,6 +403,16 @@ async def connect_database(request: DatabaseConnectionRequest):
 
         DatabaseManager.set_user_connection(session_id, connection_info)
 
+        # Analyze and populate Pinecone with real business data
+        try:
+            success = genbiapp.populate_with_real_business_data(request.database_url, session_id)
+            if success:
+                logger.info(f"Populated Pinecone with real business insights for session {session_id}")
+            else:
+                logger.warning(f"Could not extract business insights for session {session_id}")
+        except Exception as e:
+            logger.error(f"Error populating business insights: {e}")
+
         logger.info(f"Database connected for session {session_id}: {test_result['database_name']}")
 
         return {

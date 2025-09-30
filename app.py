@@ -9,6 +9,7 @@ import uuid
 import time
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
+from functools import lru_cache
 
 from lib.peppagenbi import GenBISQL
 from lib.utils.utils import parse_api_response
@@ -57,6 +58,19 @@ prompt_engine = PeppaPromptEngine()
 # Create database tables if they don't exist
 # This is for initial setup during development. In production, use Alembic migrations.
 Base.metadata.create_all(bind=engine)
+
+# Startup event to populate knowledge base
+@app.on_event("startup")
+async def startup_event():
+    """Populate knowledge base with expert content and web insights on startup"""
+    logger.info("Server starting up - initializing knowledge base...")
+    try:
+        # Trigger knowledge base population on first retrieval
+        await genbiapp._ensure_knowledge_base_populated()
+        logger.info("Knowledge base initialization completed")
+    except Exception as e:
+        logger.error(f"Knowledge base initialization failed: {e}")
+        logger.info("Server will continue with fallback content")
 
 # Include the new user authentication router
 app.include_router(user_router, prefix="/auth", tags=["Authentication"])
@@ -110,27 +124,148 @@ async def enhanced_chat(request: ChatRequest):
         )
 
 
+# Simple cache for dashboard analytics to prevent excessive calls
+dashboard_cache = {}
+CACHE_DURATION = 30  # 30 seconds
+
+@app.post("/analytics/dashboard")
+async def get_dashboard_analytics(request: AnalyticsRequest):
+    """Get dashboard analytics data for connected database or mock data"""
+    try:
+        session_id = request.filters.get('session_id') if request.filters else None
+        
+        # Check cache first
+        cache_key = f"dashboard_{session_id}"
+        current_time = time.time()
+        
+        if cache_key in dashboard_cache:
+            cached_data, cache_time = dashboard_cache[cache_key]
+            if current_time - cache_time < CACHE_DURATION:
+                logger.info(f"Returning cached dashboard data for session: {session_id}")
+                return cached_data
+        
+        # Get specific data for dashboard widgets with fallback logic (no AI calls needed)
+        sales_data = DatabaseManager.get_data(session_id=session_id, query_type="sales_data", use_mock=False)
+        
+        # If no real sales data, fallback to mock data for demo purposes
+        if not sales_data:
+            logger.info("No real sales data found, using mock data for dashboard")
+            sales_data = DatabaseManager.get_data(session_id=session_id, query_type="sales_data", use_mock=True)
+        
+        inventory_data = DatabaseManager.get_data(session_id=session_id, query_type="inventory_data", use_mock=False)
+        if not inventory_data:
+            inventory_data = DatabaseManager.get_data(session_id=session_id, query_type="inventory_data", use_mock=True)
+            
+        campaign_data = DatabaseManager.get_data(session_id=session_id, query_type="campaign_data", use_mock=False)
+        if not campaign_data:
+            campaign_data = DatabaseManager.get_data(session_id=session_id, query_type="campaign_data", use_mock=True)
+
+        # Debug logging
+        logger.info(f"Dashboard analytics - Session: {session_id}")
+        logger.info(f"Sales data count: {len(sales_data)}")
+        logger.info(f"Sample sales data: {sales_data[:2] if sales_data else 'No data'}")
+        logger.info(f"Inventory data count: {len(inventory_data)}")
+        logger.info(f"Campaign data count: {len(campaign_data)}")
+
+        # Calculate key metrics with flexible field mapping
+        def get_sales_amount(item):
+            # Try different possible field names for sales amount
+            return (item.get('sales_amount') or 
+                   item.get('amount') or 
+                   item.get('total_amount') or 
+                   item.get('revenue') or 
+                   item.get('total') or 0)
+
+        def get_units_sold(item):
+            # Try different possible field names for units sold
+            return (item.get('units_sold') or 
+                   item.get('quantity') or 
+                   item.get('qty') or 
+                   item.get('units') or 0)
+
+        total_revenue = sum(get_sales_amount(item) for item in sales_data)
+        total_units = sum(get_units_sold(item) for item in sales_data)
+        avg_order_value = total_revenue / len(sales_data) if sales_data else 0
+        
+        logger.info(f"Calculated metrics - Revenue: {total_revenue}, Units: {total_units}, AOV: {avg_order_value}")
+        
+        # Low stock items
+        low_stock_items = [
+            item for item in inventory_data 
+            if item.get('current_stock', 0) < item.get('reorder_level', 0)
+        ]
+        
+        # Campaign performance with flexible field mapping
+        def get_roas(item):
+            return (item.get('roas') or 
+                   item.get('return_on_ad_spend') or 
+                   (item.get('revenue', 0) / max(item.get('spend', 1), 1)) or 0)
+
+        def get_spend(item):
+            return (item.get('spend') or 
+                   item.get('ad_spend') or 
+                   item.get('cost') or 0)
+
+        avg_roas = sum(get_roas(item) for item in campaign_data) / len(campaign_data) if campaign_data else 0
+        total_ad_spend = sum(get_spend(item) for item in campaign_data)
+
+        response_data = {
+            "status": "success",
+            "metrics": {
+                "total_revenue": total_revenue,
+                "total_units_sold": total_units,
+                "average_order_value": avg_order_value,
+                "low_stock_count": len(low_stock_items),
+                "average_roas": avg_roas,
+                "total_ad_spend": total_ad_spend
+            },
+            "sales_data": sales_data[-10:],  # Last 10 sales
+            "inventory_alerts": low_stock_items[:5],  # Top 5 low stock items
+            "top_campaigns": sorted(campaign_data, key=lambda x: x.get('roas', 0), reverse=True)[:3],
+            "last_updated": int(time.time()),
+            "session_id": session_id
+        }
+
+        # Cache the response
+        dashboard_cache[cache_key] = (response_data, current_time)
+        logger.info(f"Cached dashboard data for session: {session_id}")
+
+        return response_data
+
+    except Exception as e:
+        logger.error(f"Error getting dashboard analytics: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                'error': 'Dashboard analytics failed',
+                'message': str(e)
+            }
+        )
+
+
 @app.post("/analytics/{analysis_type}")
 async def run_analytics(analysis_type: str, request: AnalyticsRequest):
     """Run analytics using the unified business agent"""
     try:
-        # Map analysis type to business category
-        category_mapping = {
-            "sales_performance": "sales_revenue",
-            "inventory_analysis": "inventory_operations",
-            "marketing_performance": "marketing_customer",
-            "customer_segmentation": "customer_behavior",
-            "revenue_trends": "sales_revenue",
-            "product_performance": "sales_revenue"
+        session_id = request.filters.get("session_id", "default-session") if request.filters else "default-session"
+
+        # Get business data for analysis
+        business_data = {
+            "sales_data": DatabaseManager.get_data(session_id, "sales_data"),
+            "inventory_data": DatabaseManager.get_data(session_id, "inventory_data"),
+            "campaign_data": DatabaseManager.get_data(session_id, "campaign_data"),
         }
 
-        business_category = category_mapping.get(analysis_type, "general_analysis")
-
-        result = await business_agent.analyze(
+        # Use analyze_direct_query with proper business data
+        result_str = await business_agent.analyze_direct_query(
             query=f"Analyze {analysis_type} for business insights",
-            business_category=business_category,
-            analysis_type="descriptive"
+            business_data=business_data,
+            conversation_history=[]
         )
+
+        # Parse JSON response
+        import json
+        result = json.loads(result_str)
 
         logger.info(f"Analytics executed: {analysis_type}")
         return result
@@ -150,13 +285,26 @@ async def run_analytics(analysis_type: str, request: AnalyticsRequest):
 async def run_inventory_agent():
     """Run inventory monitoring using unified business agent"""
     try:
-        result = await business_agent.analyze(
+        session_id = "default-session"  # Could be passed as query param if needed
+
+        # Get business data for analysis
+        business_data = {
+            "inventory_data": DatabaseManager.get_data(session_id, "inventory_data"),
+            "low_stock_items": DatabaseManager.get_data(session_id, "low_stock_items"),
+        }
+
+        # Use analyze_direct_query
+        result_str = await business_agent.analyze_direct_query(
             query="Monitor inventory levels and generate alerts for low stock items",
-            business_category="inventory_operations",
-            analysis_type="diagnostic"
+            business_data=business_data,
+            conversation_history=[]
         )
 
-        logger.info(f"Inventory analysis executed: {result.get('status')}")
+        # Parse JSON response
+        import json
+        result = json.loads(result_str)
+
+        logger.info(f"Inventory analysis executed: {result.get('type')}")
         return result
 
     except Exception as e:
@@ -175,13 +323,26 @@ async def run_inventory_agent():
 async def run_marketing_agent():
     """Run marketing optimization using unified business agent"""
     try:
-        result = await business_agent.analyze(
+        session_id = "default-session"  # Could be passed as query param if needed
+
+        # Get business data for analysis
+        business_data = {
+            "campaign_data": DatabaseManager.get_data(session_id, "campaign_data"),
+            "underperforming_campaigns": DatabaseManager.get_data(session_id, "underperforming_campaigns"),
+        }
+
+        # Use analyze_direct_query
+        result_str = await business_agent.analyze_direct_query(
             query="Analyze marketing campaign performance and optimize ROAS",
-            business_category="marketing_customer",
-            analysis_type="prescriptive"
+            business_data=business_data,
+            conversation_history=[]
         )
 
-        logger.info(f"Marketing analysis executed: {result.get('status')}")
+        # Parse JSON response
+        import json
+        result = json.loads(result_str)
+
+        logger.info(f"Marketing analysis executed: {result.get('type')}")
         return result
 
     except Exception as e:
@@ -236,7 +397,7 @@ async def get_prompt_capabilities():
                 "prescriptive", "comparative", "descriptive"
             ],
             "specializations": [
-                "Nigerian retail market",
+                "Global ecommerce market",
                 "Sales forecasting",
                 "Marketing optimization",
                 "Inventory management",
@@ -403,16 +564,8 @@ async def connect_database(request: DatabaseConnectionRequest):
 
         DatabaseManager.set_user_connection(session_id, connection_info)
 
-        # Analyze and populate Pinecone with real business data
-        try:
-            success = genbiapp.populate_with_real_business_data(request.database_url, session_id)
-            if success:
-                logger.info(f"Populated Pinecone with real business insights for session {session_id}")
-            else:
-                logger.warning(f"Could not extract business insights for session {session_id}")
-        except Exception as e:
-            logger.error(f"Error populating business insights: {e}")
-
+        # Note: Pinecone is pre-populated with expert marketing/sales knowledge
+        # User's database provides the data, Pinecone provides the expertise
         logger.info(f"Database connected for session {session_id}: {test_result['database_name']}")
 
         return {
@@ -564,7 +717,7 @@ async def root():
             "unified_analytics": "Single agent for all business analysis types",
             "modular_tools": "Reusable tools for database, insights, alerts, recommendations",
             "sophisticated_prompts": "100+ retail scenario prompts supported",
-            "market_specialization": "Nigerian retail market focus"
+            "market_specialization": "Global ecommerce market focus"
         },
         "available_tools": business_agent.get_available_tools(),
         "available_workflows": business_agent.get_available_workflows(),

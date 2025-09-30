@@ -193,7 +193,7 @@ class BusinessMetrics:
     def apply_seasonal_factor(base_value: float, quarter: str) -> float:
         """Apply seasonal adjustments to values"""
         from ..config import AppConfig
-        factors = AppConfig.NIGERIAN_MARKET_CONTEXT['seasonal_factors']
+        factors = AppConfig.GLOBAL_MARKET_CONTEXT['seasonal_factors']
         factor = factors.get(quarter.upper(), 1.0)
         return base_value * factor
 

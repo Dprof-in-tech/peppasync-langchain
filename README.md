@@ -137,12 +137,12 @@ graph TD
 The system includes 15 pre-loaded business knowledge documents:
 
 - **Products**: Electronics, fashion, home goods categories
-- **Sales Patterns**: Seasonal trends (Q4/Q2 peaks), Nigerian market patterns
+- **Sales Patterns**: Seasonal trends (Q4/Q2 peaks), global ecommerce patterns
 - **Customer Demographics**: Age groups, gender distribution, behavior
 - **Marketing**: Multi-platform campaigns (Facebook, Instagram, Google, TikTok)
 - **Inventory**: Just-in-time principles, reorder management
 - **Metrics**: KPIs, ROAS targets, performance indicators
-- **Market Context**: Nigerian retail characteristics, payment preferences
+- **Market Context**: Global ecommerce characteristics, payment preferences
 - **Challenges**: Common business problems and solutions
 
 ## 🔧 Technical Implementation
@@ -320,10 +320,10 @@ curl -X POST "http://localhost:8000/database/connect" \
 - **Flexible Input**: Natural language queries work across all endpoints
 - **Consistent Output**: Structured responses with citations
 
-### Nigerian Market Focus
-- **Currency**: All values in Nigerian Naira (₦)
-- **Local Context**: Market characteristics, payment preferences
-- **Business Patterns**: Seasonal trends, cultural considerations
+### Global Ecommerce Focus
+- **Currency**: All values in US Dollars ($)
+- **Local Context**: International market characteristics, payment preferences
+- **Business Patterns**: Global seasonal trends, cultural considerations
 - **Regional Insights**: Supply chain, logistics, economic factors
 
 ## 🛠️ Development
@@ -345,4 +345,4 @@ curl -X POST "http://localhost:8000/database/connect" \
 
 ---
 
-**Built with ❤️ for Nigerian businesses using modern AI technologies**
+**Built with ❤️ for global businesses using modern AI technologies**

@@ -3,32 +3,23 @@ Tool Registry for PeppaSync Business Intelligence Platform
 Centralized registry of all available tools and their configurations
 """
 from typing import Dict, Any, List
-from .tools.database_tool import DatabaseQueryTool
 from .tools.insight_tool import InsightGenerationTool
-from .tools.alert_tool import AlertTool
-from .tools.recommendation_tool import RecommendationTool
 
 class ToolRegistry:
     """Centralized registry for all business intelligence tools"""
-    
+
     @staticmethod
     def get_all_tools() -> Dict[str, Any]:
-        """Get all available tools"""
+        """Get all available tools - now just the unified analysis tool"""
         return {
-            "database": DatabaseQueryTool(),
-            "insights": InsightGenerationTool(),
-            "alerts": AlertTool(),
-            "recommendations": RecommendationTool()
+            "unified_analysis": InsightGenerationTool()
         }
     
     @staticmethod
     def get_tool_descriptions() -> Dict[str, str]:
         """Get descriptions of all tools"""
         return {
-            "database": "Query business data (sales, inventory, campaigns, customers)",
-            "insights": "Generate AI-powered business insights from data",
-            "alerts": "Generate alerts for critical business conditions",
-            "recommendations": "Generate actionable business recommendations"
+            "unified_analysis": "Unified business analysis tool - generates insights, recommendations, and alerts in one pass"
         }
     
     @staticmethod

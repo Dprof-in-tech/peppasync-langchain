@@ -17,3 +17,5 @@ httpx>=0.25.0
 pinecone>=7.0.0
 langchain-pinecone>=0.2.0
 alembic
+aiohttp>=3.9.0
+beautifulsoup4>=4.12.0

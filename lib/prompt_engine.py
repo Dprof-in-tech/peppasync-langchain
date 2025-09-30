@@ -348,13 +348,16 @@ class PeppaPromptEngine:
     async def _prepare_context_node(self, state: PromptClassificationState) -> PromptClassificationState:
         """Prepare additional context for analysis"""
         try:
-            # Add Nigerian retail context
-            state.business_context.update({
-                'market': 'Nigerian retail',
-                'currency': 'NGN',
+            # Initialize context if not exists
+            context = state.business_context or {}
+            
+            # Add global market context
+            context.update({
+                'market': 'Global ecommerce',
+                'currency': 'USD',
                 'typical_profit_margins': {
-                    'electronics': 0.15,
-                    'fashion': 0.45,
+                    'electronics': 0.12,
+                    'fashion': 0.50,
                     'home_goods': 0.35
                 },
                 'seasonal_factors': {
@@ -364,11 +367,14 @@ class PeppaPromptEngine:
                     'Q3': 0.9   # Back-to-school
                 },
                 'market_conditions': {
-                    'inflation_rate': 0.12,
-                    'growth_rate': 0.08,
+                    'avg_inflation_rate': 0.04,
+                    'ecommerce_growth_rate': 0.15,
                     'competition_level': 'high'
                 }
             })
+            
+            # Update state with new context
+            state.business_context = context
             
             logger.info("Prepared business context for analysis")
             
@@ -426,8 +432,8 @@ class PeppaPromptEngine:
             
             # Create specialized system message based on category
             system_messages = {
-                'sales_revenue': "You are a retail sales analyst specializing in revenue optimization and growth strategies for Nigerian businesses.",
-                'marketing_customer': "You are a digital marketing expert focusing on customer acquisition and retention in the Nigerian market.",
+                'sales_revenue': "You are a retail sales analyst specializing in revenue optimization and growth strategies for global ecommerce businesses.",
+                'marketing_customer': "You are a digital marketing expert focusing on customer acquisition and retention in global markets.",
                 'pricing_promotions': "You are a pricing strategist with expertise in promotional campaigns and profit optimization.",
                 'inventory_operations': "You are a supply chain and inventory management expert specializing in retail operations.",
                 'channel_performance': "You are an omnichannel retail expert analyzing store and online performance.",
@@ -437,7 +443,7 @@ class PeppaPromptEngine:
             }
             
             system_message = system_messages.get(category, 
-                "You are a comprehensive business intelligence analyst specializing in Nigerian retail.")
+                "You are a comprehensive business intelligence analyst specializing in global ecommerce retail.")
             
             # Create analysis framework based on type
             analysis_frameworks = {
@@ -485,8 +491,8 @@ class PeppaPromptEngine:
             # Create comprehensive prompt
             comprehensive_prompt = f"""
             BUSINESS CONTEXT:
-            - Market: Nigerian retail sector
-            - Currency: Nigerian Naira (₦)
+            - Market: Global ecommerce sector
+            - Currency: US Dollars ($)
             - Business Context: {json.dumps(context, indent=2)}
             
             ANALYSIS REQUEST:
@@ -497,11 +503,10 @@ class PeppaPromptEngine:
             
             REQUIREMENTS:
             - Use specific numerical projections where possible
-            - Consider Nigerian market conditions (inflation, seasonality, consumer behavior)
             - Provide actionable insights that can be implemented
             - Include confidence levels for predictions
             - Address both short-term and long-term implications
-            - Consider competitive landscape and market dynamics
+            - Focus on data-driven recommendations
             
             Provide a detailed, professional analysis that directly answers the question with specific, actionable insights.
             """

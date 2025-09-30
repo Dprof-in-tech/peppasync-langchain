@@ -31,6 +31,7 @@ class GenBISQL:
         self.llm = LLMManager.get_chat_llm()
         self.embeddings = LLMManager.get_embeddings()
         self.vector_store = None
+        self._needs_population = False
 
         # Database configuration (using mock data for now)
         self.database_config = AppConfig.DATABASE_CONFIG
@@ -109,10 +110,11 @@ class GenBISQL:
             stats = index.describe_index_stats()
 
             if stats['total_vector_count'] == 0:
-                logger.info("Pinecone index is empty, populating with initial data")
-                self._populate_pinecone_with_business_data()
+                logger.info("Pinecone index is empty, will populate with expert knowledge and web content on first use...")
+                self._needs_population = True
             else:
                 logger.info(f"Pinecone index loaded with {stats['total_vector_count']} vectors")
+                self._needs_population = False
 
             logger.info("Pinecone Vector Store initialized successfully")
 
@@ -120,99 +122,41 @@ class GenBISQL:
             logger.error(f"Failed to initialize Pinecone vector store: {e}")
             raise
 
-    def _populate_pinecone_with_business_data(self):
-        """Populate Pinecone with business knowledge documents"""
+    async def _ensure_knowledge_base_populated(self):
+        """Ensure knowledge base is populated before first use"""
+        if self._needs_population and self.vector_store:
+            logger.info("Populating knowledge base on first use...")
+            await self._populate_pinecone_with_expert_and_web_content()
+            self._needs_population = False
+
+    async def _populate_pinecone_with_expert_and_web_content(self):
+        """Populate Pinecone with expert knowledge + fresh web content (runs once on startup)"""
         try:
-            business_docs = [
-                "The company sells consumer electronics, fashion items, and home goods. Main product categories include smartphones, laptops, clothing, and furniture.",
-                "Sales data shows seasonal patterns with peaks in Q4 (holiday season) and Q2 (summer season). Fashion items peak in spring and fall.",
-                "Customer demographics: 60% female, 40% male. Age groups: 25-34 (35%), 35-44 (25%), 18-24 (20%), 45-54 (15%), 55+ (5%).",
-                "Marketing campaigns run on Facebook, Google, Instagram, and TikTok. Average ROAS targets are 3.0+ for profitable campaigns.",
-                "Inventory management follows just-in-time principles. Reorder levels are set at 2 weeks of average sales velocity.",
-                "Key performance metrics: Revenue, ROAS, Customer Acquisition Cost, Lifetime Value, Inventory Turnover, Gross Margin.",
-                "Database schema includes tables: products, sales, customers, marketing_campaigns, inventory_levels, suppliers.",
-                "Revenue is tracked in Nigerian Naira (₦). Exchange rate fluctuations affect international supplier costs.",
-                "Top performing product categories by revenue: Electronics (40%), Fashion (35%), Home & Garden (15%), Sports & Outdoors (10%).",
-                "Customer satisfaction scores average 4.2/5. Main complaints relate to delivery times and product availability.",
-                "Nigerian retail market characteristics: High mobile commerce usage, preference for cash payments, social media influence on purchases.",
-                "Supply chain considerations: Import duties, currency fluctuations, local sourcing opportunities, regional distribution centers.",
-                "Seasonal business factors: Ramadan shopping patterns, back-to-school season, Christmas and New Year sales peaks.",
-                "Common business challenges: Inventory stockouts, payment processing, logistics costs, competition from international platforms.",
-                "Successful marketing strategies: Influencer partnerships, social media advertising, referral programs, loyalty schemes."
-            ]
-
-            metadatas = [
-                {"category": "products", "type": "overview"},
-                {"category": "sales", "type": "patterns"},
-                {"category": "customers", "type": "demographics"},
-                {"category": "marketing", "type": "campaigns"},
-                {"category": "inventory", "type": "management"},
-                {"category": "metrics", "type": "kpis"},
-                {"category": "database", "type": "schema"},
-                {"category": "finance", "type": "currency"},
-                {"category": "revenue", "type": "breakdown"},
-                {"category": "satisfaction", "type": "feedback"},
-                {"category": "market", "type": "characteristics"},
-                {"category": "supply_chain", "type": "considerations"},
-                {"category": "seasonal", "type": "patterns"},
-                {"category": "challenges", "type": "business"},
-                {"category": "strategies", "type": "marketing"}
-            ]
-
-            # Create Document objects
-            documents = []
-            for doc, metadata in zip(business_docs, metadatas):
-                documents.append(Document(page_content=doc, metadata=metadata))
-
+            from .expert_knowledge import ExpertKnowledgeBase
+            
+            logger.info("Fetching expert knowledge and latest web content...")
+            
+            # Get enhanced knowledge (curated + web content)
+            expert_documents = await ExpertKnowledgeBase.get_enhanced_knowledge_with_web_content(
+                include_web_content=True,
+                max_web_articles_per_source=AppConfig.MAX_WEB_ARTICLES_PER_SOURCE
+            )
+            
             # Add documents to Pinecone
-            self.vector_store.add_documents(documents)
-            logger.info(f"Populated Pinecone with {len(business_docs)} business knowledge documents")
-
+            self.vector_store.add_documents(expert_documents)
+            logger.info(f"Successfully populated Pinecone with {len(expert_documents)} documents (expert + web content)")
+            
         except Exception as e:
-            logger.error(f"Error populating Pinecone with business data: {e}")
-            raise
-
-    def populate_with_real_business_data(self, database_url: str, session_id: str = None) -> bool:
-        """
-        Populate Pinecone with real business insights from user's database
-        This replaces generic documents with actual business-specific knowledge
-        """
-        try:
-            if not self.vector_store:
-                logger.error("Vector store not initialized")
-                return False
-
-            # Get detected schema info if available
-            table_info = {}
-            if session_id:
-                from .config import DatabaseManager
-                connection_info = DatabaseManager.get_user_connection(session_id)
-                if connection_info:
-                    table_info = connection_info.get('table_info', {})
-
-            # Analyze the user's business data with schema info
-            analyzer = BusinessAnalyzer(database_url, table_info)
-            business_documents = analyzer.analyze_business_data()
-
-            if not business_documents:
-                logger.warning("No business insights could be extracted from database")
-                return False
-
-            # Clear existing documents first (optional - or we could append)
-            # For now, we'll add to existing knowledge base
-
-            # Add real business insights to Pinecone
-            self.vector_store.add_documents(business_documents)
-
-            logger.info(f"Successfully added {len(business_documents)} real business insights to Pinecone")
-            return True
-
-        except Exception as e:
-            logger.error(f"Error populating Pinecone with real business data: {e}")
-            return False
-
-
-
+            logger.error(f"Error populating Pinecone with expert and web content: {e}")
+            # Fallback to curated content only
+            try:
+                from .expert_knowledge import ExpertKnowledgeBase
+                fallback_documents = ExpertKnowledgeBase.get_all_expert_knowledge()
+                self.vector_store.add_documents(fallback_documents)
+                logger.info(f"Fallback: Populated Pinecone with {len(fallback_documents)} curated documents only")
+            except Exception as fallback_error:
+                logger.error(f"Fallback population also failed: {fallback_error}")
+                raise
     def _extract_json(self, text):
         """Extract and parse JSON from text response"""
         try:
@@ -299,6 +243,9 @@ class GenBISQL:
     async def retrieve_relevant_data(self, query: str, session_id: str = None, limit: int = 5) -> List[Dict]:
         """Retrieve relevant data from vector store and database"""
         try:
+            # Ensure knowledge base is populated
+            await self._ensure_knowledge_base_populated()
+            
             relevant_data = []
 
             if self.vector_store:
@@ -365,7 +312,7 @@ User Question: {query}
 
 Instructions:
 - Use the provided context to answer the user's question
-- If the data shows monetary values, they are in Nigerian Naira (₦)
+- If the data shows monetary values, they are in US Dollars ($)
 - Provide diagnostic (why did this happen), predictive (what will happen), and prescriptive (what to do) insights
 - Be concise but comprehensive
 - If you cannot answer from the provided context, say "I don't have enough information to answer that question"
@@ -462,10 +409,16 @@ fig2.show()
             if item.get('type') == 'knowledge':
                 formatted_parts.append(f"Knowledge: {item['content']}")
             elif item.get('type') == 'sales_data':
+                product_name = item.get('product_name', 'Unknown Product')
+                sales_amount = item.get('sales_amount', 0)
+                units_sold = item.get('units_sold', 0)
+                category = item.get('category', 'Unknown')
+                date_info = item.get('date', item.get('sale_date', 'N/A'))
+                
                 formatted_parts.append(
-                    f"Sales Data: {item['product_name']} - "
-                    f"₦{item['sales_amount']:,} revenue, {item['units_sold']} units sold, "
-                    f"Category: {item['category']}, Date: {item['date']}"
+                    f"Sales Record: {product_name} - "
+                    f"${sales_amount:,} revenue, {units_sold} units sold, "
+                    f"Category: {category}, Date: {date_info}"
                 )
             elif item.get('type') == 'inventory_data':
                 formatted_parts.append(

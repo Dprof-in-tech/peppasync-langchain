@@ -28,6 +28,9 @@ class AppConfig:
     # NeonDB/Postgres Database Configuration
     DATABASE_URL = os.getenv('DATABASE_URL')  # Example: postgresql+psycopg2://<user>:<password>@<host>/<db>
 
+    # Web Content Fetching Configuration (always enabled, runs once on startup)
+    MAX_WEB_ARTICLES_PER_SOURCE = int(os.getenv('MAX_WEB_ARTICLES_PER_SOURCE', '3'))  # Reduced for startup performance
+
     # For backwards compatibility (if DATABASE_URL is not present, fallback to these):
     DATABASE_CONFIG = {
         'host': os.getenv('DATABASE_HOST', 'localhost'),
@@ -44,23 +47,25 @@ class AppConfig:
         'max_tokens': 2000
     }
 
-    # Nigerian Market Context
-    NIGERIAN_MARKET_CONTEXT = {
-        'currency': 'NGN',
+    # Global Market Context
+    GLOBAL_MARKET_CONTEXT = {
+        'currency': 'USD',
         'typical_profit_margins': {
-            'electronics': 0.15,
-            'fashion': 0.45,
-            'home_goods': 0.35
+            'electronics': 0.12,
+            'fashion': 0.50,
+            'home_goods': 0.35,
+            'health_beauty': 0.40,
+            'automotive': 0.20
         },
         'seasonal_factors': {
-            'Q1': 0.8,
-            'Q2': 1.1,
-            'Q3': 0.9,
-            'Q4': 1.4
+            'Q1': 0.85,
+            'Q2': 1.0,
+            'Q3': 0.95,
+            'Q4': 1.35
         },
         'market_conditions': {
-            'inflation_rate': 0.12,
-            'growth_rate': 0.08,
+            'avg_inflation_rate': 0.04,
+            'ecommerce_growth_rate': 0.15,
             'competition_level': 'high'
         }
     }
@@ -465,14 +470,16 @@ class DatabaseManager:
                 table_lower = table_name.lower()
                 if any(keyword in table_lower for keyword in ['sale', 'order', 'transaction', 'purchase']):
                     column_names = [col['name'] for col in columns]
-                    query = f"SELECT * FROM {table_name} ORDER BY "
 
-                    # Try to find a date column for ordering
+                    # Try to find a date column for filtering and ordering
                     date_cols = [col for col in column_names if any(date_word in col.lower() for date_word in ['date', 'time', 'created', 'updated'])]
+
                     if date_cols:
-                        query += f"{date_cols[0]} DESC LIMIT 100"
+                        # Add 30-day filter and order by date
+                        query = f"SELECT * FROM {table_name} WHERE {date_cols[0]} >= NOW() - INTERVAL '30 days' ORDER BY {date_cols[0]} DESC LIMIT 1000"
                     else:
-                        query += f"{column_names[0]} LIMIT 100"
+                        # No date column found, just limit results
+                        query = f"SELECT * FROM {table_name} ORDER BY {column_names[0]} LIMIT 1000"
 
                     queries.append(query)
 
@@ -593,24 +600,24 @@ class DatabaseManager:
             'sales_data': [
                 {
                     'product_name': 'iPhone 15 Pro',
-                    'sales_amount': 2850000,
+                    'sales_amount': 94750,
                     'units_sold': 95,
                     'category': 'Electronics',
-                    'profit_margin': 0.15
+                    'profit_margin': 0.12
                 },
                 {
                     'product_name': 'Nike Air Max',
-                    'sales_amount': 675000,
+                    'sales_amount': 6750,
                     'units_sold': 45,
                     'category': 'Fashion',
-                    'profit_margin': 0.45
+                    'profit_margin': 0.50
                 },
                 {
                     'product_name': 'Samsung Smart TV 55"',
-                    'sales_amount': 1200000,
+                    'sales_amount': 19800,
                     'units_sold': 20,
                     'category': 'Electronics',
-                    'profit_margin': 0.20
+                    'profit_margin': 0.18
                 }
             ],
             'inventory_data': [
@@ -619,35 +626,35 @@ class DatabaseManager:
                     'current_stock': 5,
                     'reorder_level': 20,
                     'category': 'Electronics',
-                    'supplier': 'Apple Nigeria'
+                    'supplier': 'Apple Inc.'
                 },
                 {
                     'product_name': 'Samsung Galaxy S24',
                     'current_stock': 12,
                     'reorder_level': 15,
                     'category': 'Electronics',
-                    'supplier': 'Samsung Nigeria'
+                    'supplier': 'Samsung Electronics'
                 },
                 {
                     'product_name': 'Nike Air Max',
                     'current_stock': 2,
                     'reorder_level': 10,
                     'category': 'Fashion',
-                    'supplier': 'Nike Nigeria'
+                    'supplier': 'Nike Inc.'
                 },
                 {
                     'product_name': 'MacBook Pro 14',
                     'current_stock': 3,
                     'reorder_level': 8,
                     'category': 'Electronics',
-                    'supplier': 'Apple Distributor NG'
+                    'supplier': 'Apple Inc.'
                 },
                 {
                     'product_name': 'Adidas Sneakers',
                     'current_stock': 25,
                     'reorder_level': 20,
                     'category': 'Fashion',
-                    'supplier': 'Adidas Nigeria'
+                    'supplier': 'Adidas AG'
                 }
             ],
             'campaign_data': [
@@ -655,32 +662,32 @@ class DatabaseManager:
                     'campaign_id': 'FB_001',
                     'campaign_name': 'Electronics Flash Sale',
                     'platform': 'Facebook',
-                    'spend': 150000,
-                    'revenue': 450000,
+                    'spend': 1500,
+                    'revenue': 4500,
                     'roas': 3.0
                 },
                 {
                     'campaign_id': 'IG_002',
                     'campaign_name': 'Fashion Week Promo',
                     'platform': 'Instagram',
-                    'spend': 200000,
-                    'revenue': 620000,
+                    'spend': 2000,
+                    'revenue': 6200,
                     'roas': 3.1
                 },
                 {
                     'campaign_id': 'G_002',
                     'campaign_name': 'Brand Awareness - Google Ads',
                     'platform': 'Google',
-                    'spend': 220000,
-                    'revenue': 290000,
+                    'spend': 2200,
+                    'revenue': 2900,
                     'roas': 1.32
                 },
                 {
                     'campaign_id': 'TT_001',
                     'campaign_name': 'Youth Fashion - TikTok',
                     'platform': 'TikTok',
-                    'spend': 80000,
-                    'revenue': 180000,
+                    'spend': 800,
+                    'revenue': 1800,
                     'roas': 2.25
                 }
             ]

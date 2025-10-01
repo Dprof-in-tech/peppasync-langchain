@@ -700,6 +700,15 @@ async def generate_insights(request: PromptRequest):
         )
 
 
+@app.get("/health")
+async def health_check():
+    """Simple health check endpoint for monitoring/deployment platforms"""
+    return {
+        "status": "healthy",
+        "service": "peppasync-langchain",
+        "timestamp": time.time()
+    }
+
 @app.get("/")
 async def root():
     """Health check endpoint with capabilities overview"""

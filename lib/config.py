@@ -42,7 +42,7 @@ class AppConfig:
 
     # LLM Configuration
     LLM_CONFIG = {
-        'model': 'gpt-4o-mini',
+        'model': 'gpt-4o',  # Faster and better at structured output than mini
         'temperature': 0.1,
         'max_tokens': 2000
     }

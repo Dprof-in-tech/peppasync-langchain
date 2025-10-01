@@ -357,13 +357,44 @@ Respond with a JSON object:
                 final_state = result.__dict__ if hasattr(result, '__dict__') else result
             
             # Format successful response
-            response_data = {
-                'output': final_state.get('response', 'No response generated'),
-                'citations': final_state.get('citations', []),
-                'context_used': False,  # Simplified - no context analysis
-                'is_followup': False,   # Simplified - no followup analysis  
-                'error': final_state.get('error', None)
-            }
+            # Parse the response from agent (it's JSON string)
+            import json
+            import re
+            response_str = final_state.get('response', '{}')
+
+            # Strip markdown code blocks if present (```json ... ```)
+            response_str = re.sub(r'^```json\s*', '', response_str, flags=re.MULTILINE)
+            response_str = re.sub(r'\s*```$', '', response_str, flags=re.MULTILINE)
+            response_str = response_str.strip()
+
+            try:
+                parsed_response = json.loads(response_str)
+                response_data = {
+                    'output': parsed_response.get('insights', 'No insights generated'),
+                    'insights': parsed_response.get('insights', ''),
+                    'recommendations': parsed_response.get('recommendations', []),
+                    'alerts': parsed_response.get('alerts', []),
+                    'suggested_actions': parsed_response.get('suggested_actions', []),
+                    'draft_content': parsed_response.get('draft_content'),  # For action confirmations
+                    'draft_type': parsed_response.get('draft_type'),  # email, report, etc.
+                    'metadata': parsed_response.get('metadata', {}),
+                    'citations': final_state.get('citations', []),
+                    'context_used': False,  # Simplified - no context analysis
+                    'is_followup': False,   # Simplified - no followup analysis
+                    'error': final_state.get('error', None)
+                }
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse agent response as JSON: {e}")
+                response_data = {
+                    'output': response_str,
+                    'insights': response_str,
+                    'recommendations': [],
+                    'alerts': [],
+                    'citations': final_state.get('citations', []),
+                    'context_used': False,
+                    'is_followup': False,
+                    'error': str(e)
+                }
             
             LoggingUtils.log_performance("process_conversation", start_time, session_id=session_id)
             return ResponseFormatter.format_success(response_data, session_id)

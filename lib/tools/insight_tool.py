@@ -6,6 +6,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from ..config import LLMManager
 from ..peppagenbi import GenBISQL
+from ..action_handler import ActionHandler
 from langchain.schema import HumanMessage, SystemMessage
 
 logger = logging.getLogger(__name__)
@@ -26,9 +27,16 @@ class InsightGenerationTool(BaseTool):
     def _run(self, query: str, business_data: Dict[str, Any], conversation_history: List[Dict] = None) -> Dict[str, Any]:
         """
         Unified analysis: generates insights, recommendations, and alerts in one pass.
-        No more complex orchestration or reference resolving needed.
+        Also handles action confirmations (draft emails, reports, etc.)
         """
         try:
+            # First, check if user is confirming a suggested action
+            if conversation_history and ActionHandler.detect_confirmation(query):
+                pending_action = ActionHandler.extract_pending_action(conversation_history)
+                if pending_action:
+                    logger.info(f"User confirmed action: {pending_action['action'].get('action_type')}")
+                    return self._handle_action_confirmation(query, pending_action, business_data)
+
             llm = LLMManager.get_chat_llm()
 
             # Extract sales data (primary data source for most queries)
@@ -38,15 +46,17 @@ class InsightGenerationTool(BaseTool):
 
             # Aggregate sales data by product (30-day and 14-day summaries)
             product_summary = self._aggregate_sales_by_product(sales_data)
+            # Limit inventory data to top 20 items to reduce LLM context
+            inventory_data_limited = inventory_data[:20] if len(inventory_data) > 20 else inventory_data
 
-            # Get expert knowledge from vector store
-            expert_insights = self._retrieve_expert_knowledge(query, sales_data)
+            # Get expert knowledge from vector store (skip for simple queries)
+            expert_insights = self._retrieve_expert_knowledge(query, sales_data) if self._needs_expert_insights(query) else ""
 
             # Format conversation history if available
             conversation_context = ""
             if conversation_history:
                 conversation_context = "PREVIOUS CONVERSATION:\n"
-                for exchange in conversation_history[-3:]:  # Last 3 exchanges for context
+                for exchange in conversation_history[-5:]:  # Last 5 exchanges for context
                     # Handle both formats: {'query': '...', 'response': '...'} or {'role': '...', 'content': '...'}
                     if 'query' in exchange and 'response' in exchange:
                         user_query = exchange['query']
@@ -74,14 +84,12 @@ class InsightGenerationTool(BaseTool):
             PRODUCT PERFORMANCE SUMMARY (last 30 days):
             {json.dumps(product_summary, indent=2, default=json_serializer)}
 
-            INVENTORY DATA:
-            {json.dumps(inventory_data, indent=2, default=json_serializer)}
+            INVENTORY DATA (top {len(inventory_data_limited)} items):
+            {json.dumps(inventory_data_limited, indent=2, default=json_serializer)}
 
             CAMPAIGN DATA:
             {json.dumps(campaign_data, indent=2, default=json_serializer)}
-
-            EXPERT MARKETING KNOWLEDGE:
-            {expert_insights[:500]}...
+            {f"EXPERT SALES AND MARKETING KNOWLEDGE:\\n{expert_insights[:500]}..." if expert_insights else ""}
 
             RESPOND WITH A JSON OBJECT IN THIS EXACT FORMAT:
             {{
@@ -102,6 +110,13 @@ class InsightGenerationTool(BaseTool):
                         "details": "More context about the alert",
                         "action_required": "What needs to be done"
                     }}
+                ],
+                "suggested_actions": [
+                    {{
+                        "action_type": "draft_email|create_report|generate_forecast|create_purchase_order",
+                        "description": "What you can help with",
+                        "prompt": "Question to ask user (e.g., 'Would you like me to draft a reorder email?')"
+                    }}
                 ]
             }}
 
@@ -110,6 +125,8 @@ class InsightGenerationTool(BaseTool):
             - insights = brief data summary (what IS happening)
             - recommendations = actionable advice (what to DO about it)
             - alerts = critical issues requiring immediate attention
+            - suggested_actions = proactive offers to help (e.g., "low stock alert" → suggest "draft_email" to supplier)
+            - When you generate an alert, also add a suggested_action asking if user wants help with it
 
             CRITICAL INSTRUCTIONS:
             - IF THERE IS A PREVIOUS CONVERSATION: Use context to understand what the user is referring to (e.g., "this product", "improve sales for this")
@@ -122,12 +139,15 @@ class InsightGenerationTool(BaseTool):
             - Recommendations should incorporate expert marketing knowledge and be ACTIONABLE
             - Generate 2-4 recommendations when appropriate
             - Only create alerts for truly critical issues (low stock, failing campaigns, etc.)
-            - Respond ONLY with valid JSON, no markdown or extra text
+            - Respond ONLY with valid JSON - NO markdown code blocks, NO ```json, just pure JSON
             - DO NOT HALLUCINATE OR INVENT NUMBERS - only use what's in the data provided
+            - ONLY ANSWER QUESTIONS RELATED TO SALES AND MARKETING. IF the question asked by the user is not related to sales and marketing , respond that the question is out of scope and do not generate any recommendations or any alerts.
+
+            IMPORTANT: Your response must be valid JSON that can be parsed directly. Do NOT wrap it in markdown.
             """
 
             messages = [
-                SystemMessage(content="You are a business intelligence analyst. Respond only with valid JSON."),
+                SystemMessage(content="You are a business intelligence analyst. Respond ONLY with valid JSON. Do NOT use markdown code blocks or any formatting - just pure JSON."),
                 HumanMessage(content=analysis_prompt)
             ]
 
@@ -155,6 +175,36 @@ class InsightGenerationTool(BaseTool):
                 "recommendations": [],
                 "alerts": [{"severity": "CRITICAL", "message": "Analysis error", "details": str(e), "action_required": "Check logs"}]
             }
+
+    def _needs_expert_insights(self, query: str) -> bool:
+        """
+        Determine if query needs expert marketing insights.
+        Skip for simple data queries to speed up response.
+        """
+        query_lower = query.lower()
+
+        # Skip expert insights for simple data queries
+        simple_patterns = [
+            "top performing", "worst performing", "show me", "what are",
+            "list", "how many", "total", "sales", "revenue"
+        ]
+
+        # Needs expert insights for strategic/marketing questions
+        expert_patterns = [
+            "how to improve", "how can i", "what should i do",
+            "recommend", "strategy", "marketing", "grow", "increase"
+        ]
+
+        # If it's asking for advice/recommendations, use expert insights
+        if any(pattern in query_lower for pattern in expert_patterns):
+            return True
+
+        # If it's just a simple data query, skip expert insights
+        if any(pattern in query_lower for pattern in simple_patterns):
+            return False
+
+        # Default: use expert insights
+        return True
 
     def _aggregate_sales_by_product(self, sales_data: List[Dict]) -> List[Dict]:
         """
@@ -294,6 +344,101 @@ class InsightGenerationTool(BaseTool):
         
         5. Customer Retention: Implement loyalty programs and exceptional customer service to increase lifetime value and reduce churn.
         """
+
+    def _handle_action_confirmation(self, query: str, pending_action: Dict, business_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle when user confirms a suggested action.
+        Generate the actual output (email draft, report, etc.) via LLM.
+        """
+        import asyncio
+
+        action_type = pending_action['action'].get('action_type')
+        context = pending_action['context']
+
+        logger.info(f"Generating {action_type} for user...")
+
+        try:
+            # Extract relevant data based on action type
+            sales_data = business_data.get("sales_data", [])
+            inventory_data = business_data.get("inventory_data", [])
+            product_summary = self._aggregate_sales_by_product(sales_data)
+
+            # Generate the appropriate output via LLM
+            if action_type == 'draft_email':
+                # Use ActionHandler to generate email
+                draft = asyncio.run(ActionHandler.generate_draft_email(
+                    product_data=product_summary[0] if product_summary else {},
+                    inventory_data=inventory_data,
+                    context=context
+                ))
+
+                return {
+                    "insights": f"I've drafted a requisition email based on the stock alert. You can copy and send this to your supplier:",
+                    "draft_content": draft,
+                    "draft_type": "email",
+                    "recommendations": [],
+                    "alerts": []
+                }
+
+            elif action_type == 'create_report':
+                draft = asyncio.run(ActionHandler.generate_sales_report(
+                    product_data=product_summary[0] if product_summary else {},
+                    context=context
+                ))
+
+                return {
+                    "insights": "Here's your sales performance report:",
+                    "draft_content": draft,
+                    "draft_type": "report",
+                    "recommendations": [],
+                    "alerts": []
+                }
+
+            elif action_type == 'generate_forecast':
+                draft = asyncio.run(ActionHandler.generate_forecast(
+                    product_data=product_summary[0] if product_summary else {},
+                    sales_history=sales_data,
+                    context=context
+                ))
+
+                return {
+                    "insights": "Here's your sales forecast:",
+                    "draft_content": draft,
+                    "draft_type": "forecast",
+                    "recommendations": [],
+                    "alerts": []
+                }
+
+            elif action_type == 'create_purchase_order':
+                draft = asyncio.run(ActionHandler.generate_purchase_order(
+                    product_data=product_summary[0] if product_summary else {},
+                    inventory_data=inventory_data,
+                    context=context
+                ))
+
+                return {
+                    "insights": "Here's your purchase order draft:",
+                    "draft_content": draft,
+                    "draft_type": "purchase_order",
+                    "recommendations": [],
+                    "alerts": []
+                }
+
+            else:
+                logger.warning(f"Unknown action type: {action_type}")
+                return {
+                    "insights": f"I'm not sure how to handle that action type: {action_type}",
+                    "recommendations": [],
+                    "alerts": []
+                }
+
+        except Exception as e:
+            logger.error(f"Error generating action output: {e}")
+            return {
+                "insights": f"I encountered an error generating the {action_type}: {str(e)}",
+                "recommendations": [],
+                "alerts": []
+            }
 
     async def _arun(self, query: str, business_data: Dict[str, Any], conversation_history: List[Dict] = None) -> Dict[str, Any]:
         """Async version of unified analysis"""

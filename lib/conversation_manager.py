@@ -13,66 +13,60 @@ from pydantic import BaseModel, Field
 import asyncio
 from dotenv import load_dotenv
 from .prompt_engine import PeppaPromptEngine
-from .config import LLMManager
+from .config import LLMManager, DatabaseManager
 from .utils.common import ValidationUtils, LoggingUtils, ResponseFormatter
 from .agent import UnifiedBusinessAgent
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# LangGraph State
+# LangGraph State - Simplified
 class ConversationState(BaseModel):
     messages: List[Dict[str, Any]] = Field(default_factory=list)
     session_id: str = ""
     query: str = ""
+    original_query: str = ""  # Keep track of original query
     context: str = ""
     response: str = ""
-    needs_context: bool = False
-    is_followup: bool = False
+    conversation_history: List[Dict] = Field(default_factory=list)
     citations: List[Dict] = Field(default_factory=list)
     error: Optional[str] = None
-    # Enhanced fields for prompt classification
-    prompt_analysis: Dict[str, Any] = Field(default_factory=dict)
-    business_category: str = ""
-    analysis_type: str = ""
-    requires_advanced_analysis: bool = False
+    status: str = "initialized"
 
 class ConversationManager:
     """LangGraph-powered conversation manager for contextual RAG"""
     
     def __init__(self):
         self.llm = LLMManager.get_chat_llm()
-        
-        # Initialize advanced prompt engine
+
+        # Initialize advanced prompt engine  
         self.prompt_engine = PeppaPromptEngine()
-        
+
         # Initialize unified business agent
         self.business_agent = UnifiedBusinessAgent()
-        
+
         # In-memory session storage (in production, use Redis or database)
         self.sessions: Dict[str, Dict] = {}
-        
-        # Build the LangGraph workflow
+
+        # Build the simplified LangGraph workflow
         self.workflow = self._build_conversation_graph()
 
     def _build_conversation_graph(self) -> StateGraph:
-        """Build the LangGraph conversation workflow"""
+        """Build the simplified LangGraph conversation workflow"""
         
-        # Define the workflow steps
+        # Define the workflow steps - simplified flow
         workflow = StateGraph(ConversationState)
         
         # Add nodes for conversation flow
         workflow.add_node("analyze_query", self._analyze_query_node)
-        workflow.add_node("classify_prompt", self._classify_prompt_node)
         workflow.add_node("load_context", self._load_context_node)
         workflow.add_node("enhance_query", self._enhance_query_node)
-        workflow.add_node("generate_response", self._generate_response_node)
+        workflow.add_node("generate_response", self._simplified_generate_response_node)
         workflow.add_node("save_session", self._save_session_node)
-        
-        # Set entry point and edges
+
+        # Set entry point and edges - direct path without classification
         workflow.set_entry_point("analyze_query")
-        workflow.add_edge("analyze_query", "classify_prompt")
-        workflow.add_edge("classify_prompt", "load_context")
+        workflow.add_edge("analyze_query", "load_context")
         workflow.add_edge("load_context", "enhance_query")
         workflow.add_edge("enhance_query", "generate_response")
         workflow.add_edge("generate_response", "save_session")
@@ -81,48 +75,26 @@ class ConversationManager:
         return workflow.compile()
 
     async def _analyze_query_node(self, state: ConversationState) -> ConversationState:
-        """Analyze if the query needs conversational context"""
+        """Simplified query analysis - just prep the query for processing"""
         try:
             logger.info(f"Analyzing query for session: {state.session_id}")
             
-            # Simple heuristic analysis first
-            follow_up_indicators = [
-                'what about', 'how about', 'what if', 'also show', 'and what', 
-                'compare that', 'similar to', 'different from', 'tell me more',
-                'explain that', 'why is that', 'how so', 'elaborate'
-            ]
+            # Store original query
+            state.original_query = state.query
             
-            context_indicators = [
-                'that', 'this', 'it', 'they', 'those', 'these', 'same',
-                'previous', 'earlier', 'before', 'above', 'mentioned'
-            ]
-            
-            query_lower = state.query.lower()
-            
-            # Check for follow-up patterns
-            is_followup = any(indicator in query_lower for indicator in follow_up_indicators)
-            needs_context = any(indicator in query_lower for indicator in context_indicators)
-            
-            # If we have session history and indicators suggest context needed
+            # Load conversation history from session if available
             session_data = self.sessions.get(state.session_id, {})
-            has_history = len(session_data.get('history', [])) > 0
+            state.conversation_history = session_data.get('history', [])
             
-            if has_history and (is_followup or needs_context or len(state.query.split()) < 8):
-                # Use LLM for more sophisticated analysis
-                analysis = await self._llm_analyze_context_need(state.query, session_data.get('history', []))
-                state.needs_context = analysis.get('needs_context', False)
-                state.is_followup = analysis.get('is_followup', False)
-            else:
-                state.needs_context = needs_context and has_history
-                state.is_followup = is_followup and has_history
-            
-            logger.info(f"Query analysis: needs_context={state.needs_context}, is_followup={state.is_followup}")
+            logger.info(f"Query prepared for direct processing: {state.query}")
+            return state
             
         except Exception as e:
             logger.error(f"Error in analyze_query_node: {e}")
             state.error = f"Query analysis failed: {str(e)}"
-        
-        return state
+            return state
+
+
 
     async def _classify_prompt_node(self, state: ConversationState) -> ConversationState:
         """Classify the prompt using advanced prompt engine"""
@@ -162,150 +134,111 @@ class ConversationManager:
         return state
 
     async def _load_context_node(self, state: ConversationState) -> ConversationState:
-        """Load conversation history if needed"""
+        """Load conversation history - simplified"""
         try:
-            if state.needs_context:
-                session_data = self.sessions.get(state.session_id, {})
-                history = session_data.get('history', [])
-                
-                if history:
-                    # Get last 3 exchanges for context
-                    recent_history = history[-3:] if len(history) >= 3 else history
-                    
-                    context_parts = []
-                    for exchange in recent_history:
-                        context_parts.append(f"User: {exchange.get('query', '')}")
-                        response_snippet = exchange.get('response', '')[:200]
-                        if len(exchange.get('response', '')) > 200:
-                            response_snippet += "..."
-                        context_parts.append(f"Assistant: {response_snippet}")
-                    
-                    state.context = "\n".join(context_parts)
-                    logger.info(f"Loaded context for session: {state.session_id}")
-                else:
-                    state.context = ""
-            else:
-                state.context = ""
+            logger.info(f"Loading context for session: {state.session_id}")
+            # Context is already loaded in analyze_query_node
+            return state
                 
         except Exception as e:
             logger.error(f"Error in load_context_node: {e}")
             state.error = f"Context loading failed: {str(e)}"
-            
-        return state
+            return state
 
     async def _enhance_query_node(self, state: ConversationState) -> ConversationState:
-        """Enhance query with context if needed"""
+        """Enhanced query handling - simplified"""
         try:
-            if state.needs_context and state.context:
-                enhanced_query = f"""
-Previous conversation context:
-{state.context}
-
-Current question: {state.query}
-
-Please answer the current question considering the conversation context where relevant.
-"""
-                state.query = enhanced_query
-                logger.info("Enhanced query with conversation context")
+            logger.info("Query enhancement - pass through for direct processing")
+            # Query is passed through without modification for direct processing
+            return state
             
         except Exception as e:
             logger.error(f"Error in enhance_query_node: {e}")
             state.error = f"Query enhancement failed: {str(e)}"
-            
-        return state
+            return state
 
-    async def _generate_response_node(self, state: ConversationState) -> ConversationState:
-        """Generate response using UnifiedBusinessAgent"""
+    async def _simplified_generate_response_node(self, state: ConversationState) -> ConversationState:
+        """Generate response directly using the unified agent without classification"""
         try:
-            # Check if we need advanced business analysis
-            if state.requires_advanced_analysis and state.prompt_analysis:
-                logger.info(f"Using unified agent for {state.business_category} query")
+            logger.info(f"Processing query directly: {state.query}")
+            
+            # Load all available data and let the agent decide what it needs
+            database_manager = DatabaseManager()
+            
+            # Check if user has database connected
+            if DatabaseManager.has_user_connection(state.session_id):
+                logger.info("User has database connected - using unified agent with user data")
                 
-                # Use unified business agent for comprehensive analysis
-                business_result = await self.business_agent.analyze(
+                # Get comprehensive business data using the available methods
+                business_data = {
+                    "sales_data": database_manager.get_data(state.session_id, "sales_data"),
+                    "product_data": database_manager.get_data(state.session_id, "product_data"),
+                    "inventory_data": database_manager.get_data(state.session_id, "inventory_data"),
+                    "customer_data": database_manager.get_data(state.session_id, "customer_data"),
+                    "revenue_data": database_manager.get_data(state.session_id, "revenue_data"),
+                }
+                
+                # Create unified agent with all tools available
+                unified_agent = UnifiedBusinessAgent(session_id=state.session_id)
+                
+                # Direct query to agent with full context
+                response_data = await unified_agent.analyze_direct_query(
                     query=state.query,
-                    business_category=state.business_category,
-                    analysis_type=state.analysis_type
+                    business_data=business_data,
+                    conversation_history=state.conversation_history
                 )
                 
-                if business_result.get("status") == "success":
-                    # Format the business analysis response
-                    insights = business_result.get("insights", "")
-                    alerts = business_result.get("alerts", [])
-                    recommendations = business_result.get("recommendations", [])
-                    
-                    response_parts = []
-                    
-                    # Add insights
-                    if insights:
-                        response_parts.append(f"## Business Analysis:\n{insights}")
-                    
-                    # Add critical alerts
-                    critical_alerts = [a for a in alerts if a.get("priority") == "CRITICAL"]
-                    if critical_alerts:
-                        response_parts.append("\n## 🚨 Critical Alerts:")
-                        for alert in critical_alerts:
-                            response_parts.append(f"- {alert.get('message', 'Alert')}")
-                    
-                    # Add top recommendations
-                    high_priority_recs = [r for r in recommendations if r.get("priority") == "HIGH"][:3]
-                    if high_priority_recs:
-                        response_parts.append("\n## 💡 Key Recommendations:")
-                        for rec in high_priority_recs:
-                            response_parts.append(f"- {rec.get('action', 'Recommendation')}: {rec.get('details', '')}")
-                    
-                    # Add summary
-                    summary = business_result.get("data_summary", {})
-                    if summary:
-                        response_parts.append(f"\n## Summary:")
-                        response_parts.append(f"- Total Alerts: {summary.get('total_alerts', 0)}")
-                        response_parts.append(f"- Recommendations: {summary.get('total_recommendations', 0)}")
-                        if summary.get('critical_alerts', 0) > 0:
-                            response_parts.append(f"- Critical Issues: {summary.get('critical_alerts', 0)}")
-                    
-                    state.response = "\n".join(response_parts)
-                    
-                    # Add analysis metadata
-                    state.response += f"\n\n---\n*Analysis Type: {state.analysis_type.title()} | Category: {state.business_category.replace('_', ' ').title()}*"
-                    
-                else:
-                    # Fallback to traditional RAG if business analysis fails
-                    logger.warning(f"Business analysis failed, falling back to RAG: {business_result.get('error')}")
-                    await self._fallback_to_rag(state)
-                
-                logger.info(f"Generated unified agent response for {state.business_category} analysis")
+                state.response = response_data
                 
             else:
-                # Use traditional RAG for simpler queries
-                await self._fallback_to_rag(state)
-                    
+                logger.info("No database connected - providing general business advice")
+                
+                # Create a simple general advice response
+                general_advice = f"I'd be happy to help with your question: '{state.query}'. To provide specific insights about your business, I would need access to your business data. You can connect your database to get personalized analysis, or I can provide general business advice based on industry best practices."
+                
+                # Structure as JSON for consistency
+                structured_response = {
+                    "type": "general_advice",
+                    "insights": general_advice,
+                    "recommendations": [
+                        {
+                            "title": "Connect Your Database",
+                            "description": "Link your business database to get specific insights about your products, sales, and customers.",
+                            "priority": "HIGH"
+                        }
+                    ],
+                    "metadata": {
+                        "analysis_type": "General Business Advice",
+                        "business_category": "Advisory", 
+                        "timestamp": int(time.time())
+                    }
+                }
+                
+                import json
+                state.response = json.dumps(structured_response, indent=2)
+            
+            return state
+            
         except Exception as e:
-            logger.error(f"Error in generate_response_node: {e}")
+            logger.error(f"Error in simplified response generation: {e}")
+            
+            error_response = {
+                "type": "error",
+                "insights": "I encountered an error processing your request. Please try again.",
+                "recommendations": [],
+                "metadata": {
+                    "analysis_type": "Error",
+                    "business_category": "System",
+                    "timestamp": int(time.time())
+                }
+            }
+            
+            import json
+            state.response = json.dumps(error_response, indent=2)
             state.error = f"Response generation failed: {str(e)}"
-            state.response = "I encountered an error generating a response. Please try rephrasing your question."
-            
-        return state
+            return state
 
-    async def _fallback_to_rag(self, state: ConversationState):
-        """Fallback to traditional RAG for simpler queries"""
-        try:
-            logger.info("Using traditional RAG analysis")
-            from .peppagenbi import GenBISQL
-            
-            genbi = GenBISQL()
-            rag_response = await genbi.retrieve_and_generate(state.query, state.session_id)
-            
-            if rag_response:
-                state.response = rag_response.get('output', '')
-                state.citations = rag_response.get('citations', [])
-                logger.info(f"Generated traditional RAG response for session: {state.session_id}")
-            else:
-                state.response = "I couldn't generate a response. Please try again."
-                state.citations = []
-                
-        except Exception as e:
-            logger.error(f"RAG fallback failed: {e}")
-            state.response = "I encountered an error. Please try again."
+
 
     async def _save_session_node(self, state: ConversationState) -> ConversationState:
         """Save conversation exchange to session memory"""
@@ -318,7 +251,7 @@ Please answer the current question considering the conversation context where re
             
             # Add new exchange to history
             new_exchange = {
-                'query': state.query if not state.needs_context else state.query.split("Current question: ")[-1].strip(),
+                'query': state.query,
                 'response': state.response,
                 'timestamp': int(time.time())
             }
@@ -424,13 +357,44 @@ Respond with a JSON object:
                 final_state = result.__dict__ if hasattr(result, '__dict__') else result
             
             # Format successful response
-            response_data = {
-                'output': final_state.get('response', 'No response generated'),
-                'citations': final_state.get('citations', []),
-                'context_used': final_state.get('needs_context', False),
-                'is_followup': final_state.get('is_followup', False),
-                'error': final_state.get('error', None)
-            }
+            # Parse the response from agent (it's JSON string)
+            import json
+            import re
+            response_str = final_state.get('response', '{}')
+
+            # Strip markdown code blocks if present (```json ... ```)
+            response_str = re.sub(r'^```json\s*', '', response_str, flags=re.MULTILINE)
+            response_str = re.sub(r'\s*```$', '', response_str, flags=re.MULTILINE)
+            response_str = response_str.strip()
+
+            try:
+                parsed_response = json.loads(response_str)
+                response_data = {
+                    'output': parsed_response.get('insights', 'No insights generated'),
+                    'insights': parsed_response.get('insights', ''),
+                    'recommendations': parsed_response.get('recommendations', []),
+                    'alerts': parsed_response.get('alerts', []),
+                    'suggested_actions': parsed_response.get('suggested_actions', []),
+                    'draft_content': parsed_response.get('draft_content'),  # For action confirmations
+                    'draft_type': parsed_response.get('draft_type'),  # email, report, etc.
+                    'metadata': parsed_response.get('metadata', {}),
+                    'citations': final_state.get('citations', []),
+                    'context_used': False,  # Simplified - no context analysis
+                    'is_followup': False,   # Simplified - no followup analysis
+                    'error': final_state.get('error', None)
+                }
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse agent response as JSON: {e}")
+                response_data = {
+                    'output': response_str,
+                    'insights': response_str,
+                    'recommendations': [],
+                    'alerts': [],
+                    'citations': final_state.get('citations', []),
+                    'context_used': False,
+                    'is_followup': False,
+                    'error': str(e)
+                }
             
             LoggingUtils.log_performance("process_conversation", start_time, session_id=session_id)
             return ResponseFormatter.format_success(response_data, session_id)
@@ -506,3 +470,35 @@ Respond with a JSON object:
         except Exception as e:
             logger.error(f"Error cleaning up sessions: {e}")
             return 0
+
+    def _extract_section(self, text: str, section_name: str) -> str:
+        """Extract a specific numbered section from insights text"""
+        try:
+            if not text:
+                return ""
+            
+            # Map section names to their typical numbers
+            section_numbers = {
+                "Key Findings": "1",
+                "Trends and Patterns": "2", 
+                "Specific Recommendations": "3",
+                "Risk Factors": "4"
+            }
+            
+            section_num = section_numbers.get(section_name, "")
+            if not section_num:
+                return ""
+            
+            # Look for patterns like "1. Key Findings" or "1 Key Findings"
+            import re
+            pattern = rf"{section_num}\.?\s*{re.escape(section_name)}\s*(.*?)(?=\n\d\.|\n\d\s|$)"
+            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            
+            if match:
+                return match.group(1).strip()
+            
+            return ""
+            
+        except Exception as e:
+            logger.error(f"Error extracting section {section_name}: {e}")
+            return ""

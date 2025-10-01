@@ -14,4 +14,8 @@ python-multipart>=0.0.6
 jinja2>=3.1.0
 python-dotenv>=1.0.0
 httpx>=0.25.0
-faiss-cpu>=1.7.4
+pinecone>=7.0.0
+langchain-pinecone>=0.2.0
+alembic
+aiohttp>=3.9.0
+beautifulsoup4>=4.12.0

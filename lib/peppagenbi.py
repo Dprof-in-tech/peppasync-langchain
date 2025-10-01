@@ -5,17 +5,20 @@ import logging
 from typing import Dict, List, Any, Optional
 from langchain.schema import HumanMessage, SystemMessage
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import CSVLoader
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
+from langchain.docstore.document import Document
 import pandas as pd
-from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
+import numpy as np
+import uuid
+import json
 
 # Import centralized configuration
 from .config import LLMManager, AppConfig, DatabaseManager
+from .business_analyzer import BusinessAnalyzer
 
 load_dotenv()
 # Set up logging
@@ -28,63 +31,132 @@ class GenBISQL:
         self.llm = LLMManager.get_chat_llm()
         self.embeddings = LLMManager.get_embeddings()
         self.vector_store = None
+        self._needs_population = False
+
         # Database configuration (using mock data for now)
         self.database_config = AppConfig.DATABASE_CONFIG
-        self.use_mock_data = True
-        
-        # Initialize and load the vector store
+        self.use_mock_data = False
+
+        # Initialize Pinecone vector store
         self._initialize_vector_store()
 
     def _initialize_vector_store(self):
-        """Initialize or load the vector store with business knowledge"""
+        """Initialize vector store with Pinecone"""
         try:
-            # Try to load existing vector store
-            if os.path.exists("./vector_store"):
-                self.vector_store = FAISS.load_local(
-                    "./vector_store", 
-                    self.embeddings,
-                    allow_dangerous_deserialization=True
-                )
-                logger.info("Loaded existing vector store")
+            if AppConfig.PINECONE_API_KEY:
+                logger.info("Initializing Pinecone Vector Store")
+                self._init_pinecone_vector_store()
             else:
-                # Create new vector store from sample data
-                self._create_vector_store()
+                logger.warning("Pinecone Vector Store not configured. Vector search will be disabled.")
+                self.vector_store = None
+
         except Exception as e:
             logger.error(f"Error initializing vector store: {e}")
-            self._create_vector_store()
-
-    def _create_vector_store(self):
-        """Create vector store with sample business knowledge"""
-        try:
-            # Sample business knowledge documents
-            business_docs = [
-                "The company sells consumer electronics, fashion items, and home goods. Main product categories include smartphones, laptops, clothing, and furniture.",
-                "Sales data shows seasonal patterns with peaks in Q4 (holiday season) and Q2 (summer season). Fashion items peak in spring and fall.",
-                "Customer demographics: 60% female, 40% male. Age groups: 25-34 (35%), 35-44 (25%), 18-24 (20%), 45-54 (15%), 55+ (5%).",
-                "Marketing campaigns run on Facebook, Google, Instagram, and TikTok. Average ROAS targets are 3.0+ for profitable campaigns.",
-                "Inventory management follows just-in-time principles. Reorder levels are set at 2 weeks of average sales velocity.",
-                "Key performance metrics: Revenue, ROAS, Customer Acquisition Cost, Lifetime Value, Inventory Turnover, Gross Margin.",
-                "Database schema includes tables: products, sales, customers, marketing_campaigns, inventory_levels, suppliers.",
-                "Revenue is tracked in Nigerian Naira (₦). Exchange rate fluctuations affect international supplier costs.",
-                "Top performing product categories by revenue: Electronics (40%), Fashion (35%), Home & Garden (15%), Sports & Outdoors (10%).",
-                "Customer satisfaction scores average 4.2/5. Main complaints relate to delivery times and product availability."
-            ]
-            
-            from langchain.docstore.document import Document
-            
-            documents = [Document(page_content=doc) for doc in business_docs]
-            
-            # Create embeddings and vector store
-            self.vector_store = FAISS.from_documents(documents, self.embeddings)
-            
-            # Save vector store
-            self.vector_store.save_local("./vector_store")
-            logger.info("Created and saved new vector store")
-            
-        except Exception as e:
-            logger.error(f"Error creating vector store: {e}")
             self.vector_store = None
 
+    def _init_pinecone_vector_store(self):
+        """Initialize Pinecone vector store"""
+        try:
+            from pinecone import Pinecone
+            from langchain_pinecone import PineconeVectorStore
+
+            # Initialize Pinecone client
+            pc = Pinecone(api_key=AppConfig.PINECONE_API_KEY)
+
+            # Check if index exists, handle dimension mismatch
+            index_name = AppConfig.PINECONE_INDEX_NAME
+            existing_indexes = pc.list_indexes()
+
+            index_exists = index_name in [index.name for index in existing_indexes]
+
+            if index_exists:
+                # Check if dimensions match
+                index_info = pc.describe_index(index_name)
+                existing_dimension = index_info['dimension']
+
+                if existing_dimension != AppConfig.VECTOR_DIMENSION:
+                    logger.warning(f"Index {index_name} has dimension {existing_dimension}, expected {AppConfig.VECTOR_DIMENSION}")
+                    # Delete and recreate with correct dimensions
+                    logger.info(f"Deleting existing index: {index_name}")
+                    pc.delete_index(index_name)
+                    index_exists = False
+
+            if not index_exists:
+                logger.info(f"Creating Pinecone index: {index_name} with dimension {AppConfig.VECTOR_DIMENSION}")
+                pc.create_index(
+                    name=index_name,
+                    dimension=AppConfig.VECTOR_DIMENSION,
+                    metric="cosine",
+                    spec={
+                        "serverless": {
+                            "cloud": "aws",
+                            "region": "us-east-1"
+                        }
+                    }
+                )
+                # Wait for index to be ready
+                import time
+                time.sleep(5)
+
+            # Initialize the vector store
+            self.vector_store = PineconeVectorStore(
+                index_name=index_name,
+                embedding=self.embeddings,
+                pinecone_api_key=AppConfig.PINECONE_API_KEY
+            )
+
+            # Check if we need to populate with initial data
+            index = pc.Index(index_name)
+            stats = index.describe_index_stats()
+
+            if stats['total_vector_count'] == 0:
+                logger.info("Pinecone index is empty, will populate with expert knowledge and web content on first use...")
+                self._needs_population = True
+            else:
+                logger.info(f"Pinecone index loaded with {stats['total_vector_count']} vectors")
+                self._needs_population = False
+
+            logger.info("Pinecone Vector Store initialized successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize Pinecone vector store: {e}")
+            raise
+
+    async def _ensure_knowledge_base_populated(self):
+        """Ensure knowledge base is populated before first use"""
+        if self._needs_population and self.vector_store:
+            logger.info("Populating knowledge base on first use...")
+            await self._populate_pinecone_with_expert_and_web_content()
+            self._needs_population = False
+
+    async def _populate_pinecone_with_expert_and_web_content(self):
+        """Populate Pinecone with expert knowledge + fresh web content (runs once on startup)"""
+        try:
+            from .expert_knowledge import ExpertKnowledgeBase
+            
+            logger.info("Fetching expert knowledge and latest web content...")
+            
+            # Get enhanced knowledge (curated + web content)
+            expert_documents = await ExpertKnowledgeBase.get_enhanced_knowledge_with_web_content(
+                include_web_content=True,
+                max_web_articles_per_source=AppConfig.MAX_WEB_ARTICLES_PER_SOURCE
+            )
+            
+            # Add documents to Pinecone
+            self.vector_store.add_documents(expert_documents)
+            logger.info(f"Successfully populated Pinecone with {len(expert_documents)} documents (expert + web content)")
+            
+        except Exception as e:
+            logger.error(f"Error populating Pinecone with expert and web content: {e}")
+            # Fallback to curated content only
+            try:
+                from .expert_knowledge import ExpertKnowledgeBase
+                fallback_documents = ExpertKnowledgeBase.get_all_expert_knowledge()
+                self.vector_store.add_documents(fallback_documents)
+                logger.info(f"Fallback: Populated Pinecone with {len(fallback_documents)} curated documents only")
+            except Exception as fallback_error:
+                logger.error(f"Fallback population also failed: {fallback_error}")
+                raise
     def _extract_json(self, text):
         """Extract and parse JSON from text response"""
         try:
@@ -168,71 +240,53 @@ class GenBISQL:
             logger.error("Error invoking LLM: %s", str(e))
             return f"Error: {str(e)}"
 
-    async def retrieve_relevant_data(self, query: str, limit: int = 5) -> List[Dict]:
+    async def retrieve_relevant_data(self, query: str, session_id: str = None, limit: int = 5) -> List[Dict]:
         """Retrieve relevant data from vector store and database"""
         try:
-            relevant_data = []
+            # Ensure knowledge base is populated
+            await self._ensure_knowledge_base_populated()
             
+            relevant_data = []
+
             if self.vector_store:
-                # Get relevant documents from vector store
+                # Get relevant documents from Pinecone vector store
                 docs = self.vector_store.similarity_search(query, k=limit)
                 for doc in docs:
                     relevant_data.append({
                         "type": "knowledge",
-                        "content": doc.page_content
+                        "content": doc.page_content,
+                        "metadata": getattr(doc, 'metadata', {})
                     })
-            
-            # Try to get actual database data (mock for now)
-            db_data = await self._get_database_data(query)
+
+            # Try to get actual database data (with session_id)
+            db_data = await self._get_database_data(query, session_id)
             if db_data:
                 relevant_data.extend(db_data)
-            
+
             return relevant_data
             
         except Exception as e:
             logger.error(f"Error retrieving data: {e}")
             return []
 
-    async def _get_database_data(self, query: str) -> List[Dict]:
-        """Get relevant data from database (mock implementation)"""
+    async def _get_database_data(self, query: str, session_id: str = None) -> List[Dict]:
+        """Get relevant data from database - falls back to mock if no connection"""
         try:
-            # Mock data - in production, this would query actual database
-            mock_data = [
-                {
-                    "type": "sales_data",
-                    "product_name": "iPhone 15",
-                    "sales_amount": 150000,
-                    "units_sold": 50,
-                    "category": "Electronics",
-                    "date": "2024-01-15"
-                },
-                {
-                    "type": "sales_data", 
-                    "product_name": "Samsung Galaxy S24",
-                    "sales_amount": 120000,
-                    "units_sold": 40,
-                    "category": "Electronics",
-                    "date": "2024-01-15"
-                },
-                {
-                    "type": "inventory_data",
-                    "product_name": "iPhone 15",
-                    "current_stock": 25,
-                    "reorder_level": 20,
-                    "category": "Electronics"
-                }
-            ]
-            
-            # Filter mock data based on query relevance
-            relevant_data = []
+            # Determine query type from the query
             query_lower = query.lower()
-            
-            for item in mock_data:
-                if any(word in query_lower for word in ["sales", "revenue", "product", "electronics", "iphone", "samsung"]):
-                    relevant_data.append(item)
-            
-            return relevant_data[:5]  # Limit to 5 items
-            
+            query_type = "general"
+
+            if any(word in query_lower for word in ["sales", "revenue", "sold"]):
+                query_type = "sales_data"
+            elif any(word in query_lower for word in ["inventory", "stock", "available"]):
+                query_type = "inventory_data"
+            elif any(word in query_lower for word in ["customer", "demographic", "user"]):
+                query_type = "customer_data"
+
+            # Use DatabaseManager to get data (will fallback to mock if no connection)
+            data = DatabaseManager.get_data(session_id=session_id, query_type=query_type, use_mock=False)
+            return data
+
         except Exception as e:
             logger.error(f"Error getting database data: {e}")
             return []
@@ -241,10 +295,11 @@ class GenBISQL:
         """Main retrieve and generate function using LangChain"""
         try:
             # Step 1: Retrieve relevant data
-            retrieved_data = await self.retrieve_relevant_data(query)
+            retrieved_data = await self.retrieve_relevant_data(query, session_id)
             
             # Step 2: Format retrieved data for LLM
             context = self._format_retrieved_data(retrieved_data)
+            
             
             # Step 3: Create prompt template
             prompt_template = """
@@ -257,7 +312,7 @@ User Question: {query}
 
 Instructions:
 - Use the provided context to answer the user's question
-- If the data shows monetary values, they are in Nigerian Naira (₦)
+- If the data shows monetary values, they are in US Dollars ($)
 - Provide diagnostic (why did this happen), predictive (what will happen), and prescriptive (what to do) insights
 - Be concise but comprehensive
 - If you cannot answer from the provided context, say "I don't have enough information to answer that question"
@@ -276,7 +331,6 @@ Response:
             
             return {
                 'output': response,
-                'sessionId': session_id or 'default',
                 'citations': retrieved_data
             }
             
@@ -284,15 +338,14 @@ Response:
             logger.error(f"Error in retrieve_and_generate: {e}")
             return {
                 'output': f"I encountered an error processing your request: {str(e)}",
-                'sessionId': session_id or 'default',
                 'citations': []
             }
 
-    async def retrieve_and_visualize(self, prompt: str) -> Dict[str, Any]:
+    async def retrieve_and_visualize(self, prompt: str, session_id: str = None) -> Dict[str, Any]:
         """Generate visualization code and insights"""
         try:
             # Step 1: Get relevant data
-            retrieved_data = await self.retrieve_relevant_data(prompt)
+            retrieved_data = await self.retrieve_relevant_data(prompt, session_id)
             
             # Step 2: Format data for visualization prompt
             data_context = self._format_retrieved_data(retrieved_data)
@@ -356,10 +409,16 @@ fig2.show()
             if item.get('type') == 'knowledge':
                 formatted_parts.append(f"Knowledge: {item['content']}")
             elif item.get('type') == 'sales_data':
+                product_name = item.get('product_name', 'Unknown Product')
+                sales_amount = item.get('sales_amount', 0)
+                units_sold = item.get('units_sold', 0)
+                category = item.get('category', 'Unknown')
+                date_info = item.get('date', item.get('sale_date', 'N/A'))
+                
                 formatted_parts.append(
-                    f"Sales Data: {item['product_name']} - "
-                    f"₦{item['sales_amount']:,} revenue, {item['units_sold']} units sold, "
-                    f"Category: {item['category']}, Date: {item['date']}"
+                    f"Sales Record: {product_name} - "
+                    f"${sales_amount:,} revenue, {units_sold} units sold, "
+                    f"Category: {category}, Date: {date_info}"
                 )
             elif item.get('type') == 'inventory_data':
                 formatted_parts.append(

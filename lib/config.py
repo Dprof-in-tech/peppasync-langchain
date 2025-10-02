@@ -128,7 +128,22 @@ class LLMManager:
 class DatabaseManager:
     """Database connection manager with support for user database connections"""
 
-    _user_connections: Dict[str, Dict[str, Any]] = {}  # session_id -> connection_info
+    _user_connections: Dict[str, Dict[str, Any]] = {}  # Fallback in-memory storage
+    _use_redis = os.getenv('USE_REDIS_SESSIONS', 'true').lower() == 'true'
+    _redis_manager = None
+
+    @classmethod
+    def _get_redis_manager(cls):
+        """Get or initialize Redis session manager"""
+        if cls._redis_manager is None and cls._use_redis:
+            try:
+                from lib.redis_session import redis_session_manager
+                cls._redis_manager = redis_session_manager
+                logger.info("Redis session manager initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Redis session manager: {e}")
+                cls._use_redis = False
+        return cls._redis_manager
 
     @staticmethod
     def get_connection_string() -> str:
@@ -142,23 +157,62 @@ class DatabaseManager:
     @classmethod
     def set_user_connection(cls, session_id: str, connection_info: Dict[str, Any]):
         """Set user database connection for a session"""
+        # Try Redis first
+        redis_manager = cls._get_redis_manager()
+        if redis_manager and redis_manager.is_available():
+            success = redis_manager.set_session(session_id, connection_info)
+            if success:
+                logger.info(f"Session stored in Redis: {session_id}")
+                return
+            else:
+                logger.warning(f"Failed to store session in Redis, falling back to memory")
+
+        # Fallback to in-memory
         cls._user_connections[session_id] = connection_info
+        logger.info(f"Session stored in memory: {session_id}")
 
     @classmethod
     def get_user_connection(cls, session_id: str) -> Optional[Dict[str, Any]]:
         """Get user database connection for a session"""
-        return cls._user_connections.get(session_id)
+        # Try Redis first
+        redis_manager = cls._get_redis_manager()
+        if redis_manager and redis_manager.is_available():
+            session_data = redis_manager.get_session(session_id, refresh_ttl=True)
+            if session_data:
+                logger.debug(f"Session retrieved from Redis: {session_id}")
+                return session_data
+
+        # Fallback to in-memory
+        session_data = cls._user_connections.get(session_id)
+        if session_data:
+            logger.debug(f"Session retrieved from memory: {session_id}")
+        return session_data
 
     @classmethod
     def has_user_connection(cls, session_id: str) -> bool:
         """Check if session has a user database connection"""
+        # Try Redis first
+        redis_manager = cls._get_redis_manager()
+        if redis_manager and redis_manager.is_available():
+            if redis_manager.session_exists(session_id):
+                return True
+
+        # Fallback to in-memory
         return session_id in cls._user_connections
 
     @classmethod
     def remove_user_connection(cls, session_id: str):
         """Remove user database connection for a session"""
+        # Try Redis first
+        redis_manager = cls._get_redis_manager()
+        if redis_manager and redis_manager.is_available():
+            redis_manager.delete_session(session_id)
+            logger.info(f"Session deleted from Redis: {session_id}")
+
+        # Also remove from in-memory (in case it exists there)
         if session_id in cls._user_connections:
             del cls._user_connections[session_id]
+            logger.info(f"Session deleted from memory: {session_id}")
 
     @classmethod
     def get_data(cls, session_id: str, query_type: str, use_mock: bool = False) -> List[Dict[str, Any]]:

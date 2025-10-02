@@ -72,6 +72,20 @@ async def startup_event():
         logger.error(f"Knowledge base initialization failed: {e}")
         logger.info("Server will continue with fallback content")
 
+    # Initialize Redis session manager
+    logger.info("Initializing Redis session manager...")
+    try:
+        from lib.redis_session import redis_session_manager
+        redis_health = redis_session_manager.health_check()
+        if redis_health['available']:
+            logger.info(f"✅ Redis session manager ready - {redis_health.get('redis_version', 'unknown version')}")
+        else:
+            logger.warning(f"⚠️  Redis not available: {redis_health.get('message', 'unknown error')}")
+            logger.warning("Sessions will use in-memory fallback storage")
+    except Exception as e:
+        logger.warning(f"Redis initialization failed: {e}")
+        logger.warning("Sessions will use in-memory fallback storage")
+
 # Include the new user authentication router
 app.include_router(user_router, prefix="/auth", tags=["Authentication"])
 
@@ -703,10 +717,23 @@ async def generate_insights(request: PromptRequest):
 @app.get("/health")
 async def health_check():
     """Simple health check endpoint for monitoring/deployment platforms"""
+    # Check Redis health
+    redis_status = {"available": False, "status": "not initialized"}
+    try:
+        from lib.redis_session import redis_session_manager
+        redis_health = redis_session_manager.health_check()
+        redis_status = {
+            "available": redis_health.get('available', False),
+            "status": redis_health.get('status', 'unknown')
+        }
+    except Exception as e:
+        redis_status = {"available": False, "status": f"error: {str(e)}"}
+
     return {
         "status": "healthy",
         "service": "peppasync-langchain",
-        "timestamp": time.time()
+        "timestamp": time.time(),
+        "redis": redis_status
     }
 
 @app.get("/")

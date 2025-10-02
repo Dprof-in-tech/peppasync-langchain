@@ -35,7 +35,9 @@ class InsightGenerationTool(BaseTool):
                 pending_action = ActionHandler.extract_pending_action(conversation_history)
                 if pending_action:
                     logger.info(f"User confirmed action: {pending_action['action'].get('action_type')}")
-                    return self._handle_action_confirmation(query, pending_action, business_data)
+                    # Note: This sync method can't call async _handle_action_confirmation
+                    # It should only be used in sync contexts. Use _arun for async contexts.
+                    raise NotImplementedError("Action confirmation requires async context. Use _arun instead.")
 
             llm = LLMManager.get_chat_llm()
 
@@ -93,7 +95,7 @@ class InsightGenerationTool(BaseTool):
 
             RESPOND WITH A JSON OBJECT IN THIS EXACT FORMAT:
             {{
-                "insights": "Brief summary of the current situation based on the data (2-3 sentences max)",
+                "insights": "The answer to the question here. Can include insights or a brief summary about the situation but must contain the answer to the question asked.")",
                 "recommendations": [
                     {{
                         "type": "STRATEGIC/OPERATIONAL/TACTICAL",
@@ -120,10 +122,13 @@ class InsightGenerationTool(BaseTool):
                 ]
             }}
 
+            Here is an example of a good recommendation:
+            "Bundle Product 16 with Product 23 in a promotional offer to boost sales of the underperforming item. This tactic leverages the high sales volume of Product 23 to increase visibility and sales of Product 16. Expected impact: 15-20% increase in sales for Product 16 over the next month. Implementation timeframe: 1-2 weeks to set up the promotion and marketing materials."
+
             IMPORTANT FORMATTING RULES:
             - If user asks "how to improve" or "what should I do", PUT YOUR ANSWER IN THE RECOMMENDATIONS ARRAY, NOT just in insights
-            - insights = brief data summary (what IS happening)
-            - recommendations = actionable advice (what to DO about it)
+            - insights = brief data summary (what IS happening) + the direct answer to the question asked
+            - recommendations = actionable advice (what to DO about it) with clear and specific numeric projections of what can happen when that is done.
             - alerts = critical issues requiring immediate attention
             - suggested_actions = proactive offers to help (e.g., "low stock alert" → suggest "draft_email" to supplier)
             - When you generate an alert, also add a suggested_action asking if user wants help with it
@@ -137,13 +142,21 @@ class InsightGenerationTool(BaseTool):
             - If user asks about "last month" or "last 30 days", use the *_30d fields
             - Include specific numbers, product names, and metrics FROM THE DATA
             - Recommendations should incorporate expert marketing knowledge and be ACTIONABLE
+            - EXPERT MARKETING KNOWLEDGE / INSIGHTS should be used to inform recommendations, especially for strategic questions. they are there to help you provide better advice by leveraging proven marketing principles and tactics.
             - Generate 2-4 recommendations when appropriate
             - Only create alerts for truly critical issues (low stock, failing campaigns, etc.)
             - Respond ONLY with valid JSON - NO markdown code blocks, NO ```json, just pure JSON
             - DO NOT HALLUCINATE OR INVENT NUMBERS - only use what's in the data provided
             - ONLY ANSWER QUESTIONS RELATED TO SALES AND MARKETING. IF the question asked by the user is not related to sales and marketing , respond that the question is out of scope and do not generate any recommendations or any alerts.
+            - ALWAYS CHECK MY CURRENT PERFORMANCE before giving any answer or making any recommendations to how i can improve my sales and marketing performance.
+            - RECOMMENDATIONS MUST BE FACTUAL, REALISTIC AND SPECIFIC. Don't make vague suggestions like improve marketing or increase sales - be specific and provide a valid tactic or strategy with specific numbers, targets and projected results.
+            - INSIGHTS SHOULD BE DATA-DRIVEN AND OBJECTIVE. Avoid personal opinions or subjective statements - focus on the facts and figures from the data provided.
+            - ALL ANSWERS AND OUTCOMES MUST BE SPECIFIC, NUMERIC AND MEASURABLE WHEREVER POSSIBLE. Vague, generic or non-numeric answers are not acceptable.
+            - ALWAYS ANSWER THE QUESTIONS IN THE INSIGHTS SECTION IF IT IS A SIMPLE DATA QUESTION. If the user is just asking for data or stats, provide that in insights. Only use recommendations if the user is asking for advice or what to do.
 
-            IMPORTANT: Your response must be valid JSON that can be parsed directly. Do NOT wrap it in markdown.
+            IMPORTANT: 
+            - Your response must be valid JSON that can be parsed directly. Do NOT wrap it in markdown.
+            - If i ask a trick question about improving my sales or marketing performance to a lower target than what i currently have, do NOT fall for it - always check my current performance first and call it out if the target is lower than current.
             """
 
             messages = [
@@ -156,7 +169,7 @@ class InsightGenerationTool(BaseTool):
             # Parse JSON response
             try:
                 result = json.loads(response.content.strip())
-                logger.info(f"Unified analysis complete: {len(result.get('recommendations', []))} recommendations, {len(result.get('alerts', []))} alerts")
+                logger.info(f"Unified analysis complete: {len(result.get('recommendations', []))} recommendations, {len(result.get('alerts', []))} alerts, {len(result.get('suggested_actions', []))} suggested actions")
                 logger.info(f"Full LLM response: {json.dumps(result, indent=2, default=json_serializer)}")
                 return result
             except json.JSONDecodeError as e:
@@ -164,8 +177,9 @@ class InsightGenerationTool(BaseTool):
                 # Return fallback structure
                 return {
                     "insights": response.content,
-                    "recommendations": [],
-                    "alerts": []
+                    "recommendations": response.get('recommendations', []),
+                    "alerts": response.get('alerts', []),
+                    "suggested_actions": response.get('suggested_actions', [])
                 }
 
         except Exception as e:
@@ -173,7 +187,8 @@ class InsightGenerationTool(BaseTool):
             return {
                 "insights": f"Analysis failed: {str(e)}",
                 "recommendations": [],
-                "alerts": [{"severity": "CRITICAL", "message": "Analysis error", "details": str(e), "action_required": "Check logs"}]
+                "alerts": [{"severity": "CRITICAL", "message": "Analysis error", "details": str(e), "action_required": "Check logs"}],
+                "suggested_actions": []
             }
 
     def _needs_expert_insights(self, query: str) -> bool:
@@ -345,13 +360,11 @@ class InsightGenerationTool(BaseTool):
         5. Customer Retention: Implement loyalty programs and exceptional customer service to increase lifetime value and reduce churn.
         """
 
-    def _handle_action_confirmation(self, query: str, pending_action: Dict, business_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_action_confirmation(self, query: str, pending_action: Dict, business_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle when user confirms a suggested action.
         Generate the actual output (email draft, report, etc.) via LLM.
         """
-        import asyncio
-
         action_type = pending_action['action'].get('action_type')
         context = pending_action['context']
 
@@ -366,62 +379,66 @@ class InsightGenerationTool(BaseTool):
             # Generate the appropriate output via LLM
             if action_type == 'draft_email':
                 # Use ActionHandler to generate email
-                draft = asyncio.run(ActionHandler.generate_draft_email(
+                draft = await ActionHandler.generate_draft_email(
                     product_data=product_summary[0] if product_summary else {},
                     inventory_data=inventory_data,
                     context=context
-                ))
+                )
 
                 return {
                     "insights": f"I've drafted a requisition email based on the stock alert. You can copy and send this to your supplier:",
                     "draft_content": draft,
                     "draft_type": "email",
                     "recommendations": [],
-                    "alerts": []
+                    "alerts": [],
+                    "suggested_actions": []
                 }
 
             elif action_type == 'create_report':
-                draft = asyncio.run(ActionHandler.generate_sales_report(
+                draft = await ActionHandler.generate_sales_report(
                     product_data=product_summary[0] if product_summary else {},
                     context=context
-                ))
+                )
 
                 return {
                     "insights": "Here's your sales performance report:",
                     "draft_content": draft,
                     "draft_type": "report",
                     "recommendations": [],
-                    "alerts": []
+                    "alerts": [],
+                    "suggested_actions": []
                 }
 
             elif action_type == 'generate_forecast':
-                draft = asyncio.run(ActionHandler.generate_forecast(
+                draft = await ActionHandler.generate_forecast(
                     product_data=product_summary[0] if product_summary else {},
                     sales_history=sales_data,
                     context=context
-                ))
+                )
 
                 return {
                     "insights": "Here's your sales forecast:",
                     "draft_content": draft,
                     "draft_type": "forecast",
                     "recommendations": [],
-                    "alerts": []
+                    "alerts": [],
+                    "suggested_actions": []
                 }
 
             elif action_type == 'create_purchase_order':
-                draft = asyncio.run(ActionHandler.generate_purchase_order(
+                draft = await ActionHandler.generate_purchase_order(
                     product_data=product_summary[0] if product_summary else {},
                     inventory_data=inventory_data,
                     context=context
-                ))
+                )
 
                 return {
                     "insights": "Here's your purchase order draft:",
                     "draft_content": draft,
                     "draft_type": "purchase_order",
                     "recommendations": [],
-                    "alerts": []
+                    "alerts": [],
+                    "suggested_actions": []
                 }
 
             else:
@@ -429,7 +446,8 @@ class InsightGenerationTool(BaseTool):
                 return {
                     "insights": f"I'm not sure how to handle that action type: {action_type}",
                     "recommendations": [],
-                    "alerts": []
+                    "alerts": [],
+                    "suggested_actions": []
                 }
 
         except Exception as e:
@@ -437,9 +455,26 @@ class InsightGenerationTool(BaseTool):
             return {
                 "insights": f"I encountered an error generating the {action_type}: {str(e)}",
                 "recommendations": [],
-                "alerts": []
+                "alerts": [],
+                "suggested_actions": []
             }
 
     async def _arun(self, query: str, business_data: Dict[str, Any], conversation_history: List[Dict] = None) -> Dict[str, Any]:
         """Async version of unified analysis"""
-        return self._run(query, business_data, conversation_history)
+        try:
+            # First, check if user is confirming a suggested action
+            if conversation_history and ActionHandler.detect_confirmation(query):
+                pending_action = ActionHandler.extract_pending_action(conversation_history)
+                if pending_action:
+                    logger.info(f"User confirmed action: {pending_action['action'].get('action_type')}")
+                    return await self._handle_action_confirmation(query, pending_action, business_data)
+
+            # For non-action-confirmation queries, delegate to sync _run
+            return self._run(query, business_data, conversation_history)
+        except NotImplementedError:
+            # If _run raised NotImplementedError for action confirmation, handle it here
+            if conversation_history and ActionHandler.detect_confirmation(query):
+                pending_action = ActionHandler.extract_pending_action(conversation_history)
+                if pending_action:
+                    return await self._handle_action_confirmation(query, pending_action, business_data)
+            raise

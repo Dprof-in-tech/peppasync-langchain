@@ -40,6 +40,9 @@ class UnifiedBusinessAgent:
                 "insights": result.get("insights", ""),
                 "recommendations": result.get("recommendations", []),
                 "alerts": result.get("alerts", []),
+                "suggested_actions": result.get("suggested_actions", []),
+                "draft_content": result.get("draft_content"),
+                "draft_type": result.get("draft_type"),
                 "metadata": {
                     "analysis_type": "Unified Analysis",
                     "business_category": "Auto",
@@ -47,7 +50,7 @@ class UnifiedBusinessAgent:
                 }
             }
 
-            logger.info(f"Analysis complete: {len(result.get('recommendations', []))} recommendations, {len(result.get('alerts', []))} alerts")
+            logger.info(f"Analysis complete: {len(result.get('recommendations', []))} recommendations, {len(result.get('alerts', []))} alerts, {len(result.get('suggested_actions', []))} suggested actions")
             return json.dumps(response_data, indent=2, default=self._json_serializer)
 
         except Exception as e:
@@ -75,6 +78,7 @@ class UnifiedBusinessAgent:
             "insights": f"I encountered an error processing your request: {error_msg}",
             "recommendations": [],
             "alerts": [],
+            "suggested_actions": [],
             "metadata": {
                 "analysis_type": "Error",
                 "business_category": "System",

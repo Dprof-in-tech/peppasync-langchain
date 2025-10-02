@@ -24,9 +24,15 @@ class ActionHandler:
         return any(word in query_lower for word in affirmative)
 
     @staticmethod
-    def extract_pending_action(conversation_history: List[Dict]) -> Optional[Dict]:
+    def extract_pending_action(conversation_history: List[Dict], current_query: str = "") -> Optional[Dict]:
         """
-        Extract the most recent suggested action from conversation history.
+        Extract the most relevant suggested action from conversation history.
+        Matches user's current query against action descriptions.
+
+        Args:
+            conversation_history: Previous conversation exchanges
+            current_query: User's current confirmation message
+
         Returns action details if found, None otherwise.
         """
         if not conversation_history:
@@ -41,8 +47,11 @@ class ActionHandler:
             response_data = json.loads(last_exchange['response'])
             suggested_actions = response_data.get('suggested_actions', [])
 
-            if suggested_actions:
-                # Return the first suggested action with full context
+            if not suggested_actions:
+                return None
+
+            # If there's only one action, return it
+            if len(suggested_actions) == 1:
                 return {
                     'action': suggested_actions[0],
                     'context': {
@@ -51,6 +60,56 @@ class ActionHandler:
                         'recommendations': response_data.get('recommendations', [])
                     }
                 }
+
+            # If multiple actions, try to match user's query to the right one
+            if current_query:
+                query_lower = current_query.lower()
+
+                # Keywords for different action types
+                action_keywords = {
+                    'draft_email': ['email', 'mail', 'draft', 'send', 'write email'],
+                    'create_report': ['report', 'analysis', 'document', 'summary report'],
+                    'generate_forecast': ['forecast', 'predict', 'projection', 'future'],
+                    'create_purchase_order': ['purchase', 'order', 'po', 'buy']
+                }
+
+                # Try to find best match
+                best_match = None
+                best_score = 0
+
+                for action in suggested_actions:
+                    action_type = action.get('action_type', '')
+                    keywords = action_keywords.get(action_type, [])
+
+                    # Count keyword matches
+                    score = sum(1 for keyword in keywords if keyword in query_lower)
+
+                    if score > best_score:
+                        best_score = score
+                        best_match = action
+
+                # If we found a good match, use it
+                if best_match and best_score > 0:
+                    logger.info(f"Matched user query to action: {best_match.get('action_type')}")
+                    return {
+                        'action': best_match,
+                        'context': {
+                            'insights': response_data.get('insights', ''),
+                            'alerts': response_data.get('alerts', []),
+                            'recommendations': response_data.get('recommendations', [])
+                        }
+                    }
+
+            # Default: return first action if no match found
+            logger.info(f"No specific match, using first suggested action: {suggested_actions[0].get('action_type')}")
+            return {
+                'action': suggested_actions[0],
+                'context': {
+                    'insights': response_data.get('insights', ''),
+                    'alerts': response_data.get('alerts', []),
+                    'recommendations': response_data.get('recommendations', [])
+                }
+            }
         except Exception as e:
             logger.error(f"Error extracting pending action: {e}")
 

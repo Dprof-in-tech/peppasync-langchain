@@ -95,7 +95,7 @@ class InsightGenerationTool(BaseTool):
 
             RESPOND WITH A JSON OBJECT IN THIS EXACT FORMAT:
             {{
-                "insights": "The answer to the question here. Can include insights or a brief summary about the situation but must contain the answer to the question asked.")",
+                "insights": "The answer to the question here. Can include insights or a very brief summary about the situation but must contain the answer to the question asked. this must be CONCISE and straight to the point, we dont want the users to get lost in the context.")",
                 "recommendations": [
                     {{
                         "type": "STRATEGIC/OPERATIONAL/TACTICAL",
@@ -153,6 +153,7 @@ class InsightGenerationTool(BaseTool):
             - INSIGHTS SHOULD BE DATA-DRIVEN AND OBJECTIVE. Avoid personal opinions or subjective statements - focus on the facts and figures from the data provided.
             - ALL ANSWERS AND OUTCOMES MUST BE SPECIFIC, NUMERIC AND MEASURABLE WHEREVER POSSIBLE. Vague, generic or non-numeric answers are not acceptable.
             - ALWAYS ANSWER THE QUESTIONS IN THE INSIGHTS SECTION IF IT IS A SIMPLE DATA QUESTION. If the user is just asking for data or stats, provide that in insights. Only use recommendations if the user is asking for advice or what to do.
+            - THE ANSWER MUST BE VERY SIMPLE AND CONCISE. DO NOT OVER-COMPLICATE OR OVER-EXPLAIN. THE USER WANTS A STRAIGHTFORWARD ANSWER TO THEIR QUESTION, NOT A DETAILED REPORT.
 
             IMPORTANT: 
             - Your response must be valid JSON that can be parsed directly. Do NOT wrap it in markdown.

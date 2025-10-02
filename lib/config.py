@@ -286,8 +286,13 @@ class DatabaseManager:
                     # Convert RealDictRow to regular dict
                     results.extend([dict(row) for row in query_results])
                     logger.info(f"Executed query for {query_type}: {len(query_results)} rows returned")
+                    # If we got results, stop trying other queries
+                    if results:
+                        break
                 except psycopg2.Error as e:
-                    logger.warning(f"Query failed for {query_type}: {e}")
+                    # Rollback the failed transaction so we can try the next query
+                    conn.rollback()
+                    logger.debug(f"Query attempt failed for {query_type}, trying next query template")
                     continue  # Try next query if one fails
 
             cursor.close()
@@ -307,9 +312,13 @@ class DatabaseManager:
         """Get SQL queries for different data types using detected schema"""
 
         # Try to get the detected schema for this session
-        if session_id and session_id in cls._user_connections:
-            table_info = cls._user_connections[session_id].get('table_info', {})
-            return cls._generate_dynamic_queries(query_type, table_info)
+        if session_id:
+            # Get session data (from Redis or in-memory)
+            connection_info = cls.get_user_connection(session_id)
+            if connection_info:
+                table_info = connection_info.get('table_info', {})
+                if table_info:
+                    return cls._generate_dynamic_queries(query_type, table_info)
 
         # Fallback to template queries if no schema detected
 

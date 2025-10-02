@@ -32,7 +32,7 @@ class InsightGenerationTool(BaseTool):
         try:
             # First, check if user is confirming a suggested action
             if conversation_history and ActionHandler.detect_confirmation(query):
-                pending_action = ActionHandler.extract_pending_action(conversation_history)
+                pending_action = ActionHandler.extract_pending_action(conversation_history, query)
                 if pending_action:
                     logger.info(f"User confirmed action: {pending_action['action'].get('action_type')}")
                     # Note: This sync method can't call async _handle_action_confirmation
@@ -464,7 +464,7 @@ class InsightGenerationTool(BaseTool):
         try:
             # First, check if user is confirming a suggested action
             if conversation_history and ActionHandler.detect_confirmation(query):
-                pending_action = ActionHandler.extract_pending_action(conversation_history)
+                pending_action = ActionHandler.extract_pending_action(conversation_history, query)
                 if pending_action:
                     logger.info(f"User confirmed action: {pending_action['action'].get('action_type')}")
                     return await self._handle_action_confirmation(query, pending_action, business_data)
@@ -474,7 +474,7 @@ class InsightGenerationTool(BaseTool):
         except NotImplementedError:
             # If _run raised NotImplementedError for action confirmation, handle it here
             if conversation_history and ActionHandler.detect_confirmation(query):
-                pending_action = ActionHandler.extract_pending_action(conversation_history)
+                pending_action = ActionHandler.extract_pending_action(conversation_history, query)
                 if pending_action:
                     return await self._handle_action_confirmation(query, pending_action, business_data)
             raise

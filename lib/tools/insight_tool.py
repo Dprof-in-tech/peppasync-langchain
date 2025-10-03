@@ -115,9 +115,9 @@ class InsightGenerationTool(BaseTool):
                 ],
                 "suggested_actions": [
                     {{
-                        "action_type": "draft_email|create_report|generate_forecast|create_purchase_order",
+                        "action_type": "draft_email|create_report|generate_forecast|create_purchase_order | other | would you like to know more about why this is happening?",
                         "description": "What you can help with",
-                        "prompt": "Question to ask user (e.g., 'Would you like me to draft a reorder email?')"
+                        "prompt": "Question to ask user (e.g., 'Would you like me to draft a reorder email?', 'Would you like to know more about why this is happening?')"
                     }}
                 ]
             }}
@@ -130,7 +130,7 @@ class InsightGenerationTool(BaseTool):
             - insights = brief data summary (what IS happening) + the direct answer to the question asked
             - recommendations = actionable advice (what to DO about it) with clear and specific numeric projections of what can happen when that is done.
             - alerts = critical issues requiring immediate attention
-            - suggested_actions = proactive offers to help (e.g., "low stock alert" → suggest "draft_email" to supplier)
+            - suggested_actions = proactive offers to help either with an action or to explain more (e.g., "low stock alert" → suggest "draft_email" to supplier, suggest "would you like to know more about why this is happening?")
             - When you generate an alert, also add a suggested_action asking if user wants help with it
 
             CRITICAL INSTRUCTIONS:
@@ -151,6 +151,7 @@ class InsightGenerationTool(BaseTool):
             - ALWAYS CHECK MY CURRENT PERFORMANCE before giving any answer or making any recommendations to how i can improve my sales and marketing performance.
             - RECOMMENDATIONS MUST BE FACTUAL, REALISTIC AND SPECIFIC. Don't make vague suggestions like improve marketing or increase sales - be specific and provide a valid tactic or strategy with specific numbers, targets and projected results.
             - INSIGHTS SHOULD BE DATA-DRIVEN AND OBJECTIVE. Avoid personal opinions or subjective statements - focus on the facts and figures from the data provided.
+            - Be more SPECIFIC on where to spend MARKETING $ and WHY you should spend it.
             - ALL ANSWERS AND OUTCOMES MUST BE SPECIFIC, NUMERIC AND MEASURABLE WHEREVER POSSIBLE. Vague, generic or non-numeric answers are not acceptable.
             - ALWAYS ANSWER THE QUESTIONS IN THE INSIGHTS SECTION IF IT IS A SIMPLE DATA QUESTION. If the user is just asking for data or stats, provide that in insights. Only use recommendations if the user is asking for advice or what to do.
             - THE ANSWER MUST BE VERY SIMPLE AND CONCISE. DO NOT OVER-COMPLICATE OR OVER-EXPLAIN. THE USER WANTS A STRAIGHTFORWARD ANSWER TO THEIR QUESTION, NOT A DETAILED REPORT.

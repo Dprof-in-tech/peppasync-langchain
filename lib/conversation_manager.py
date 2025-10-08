@@ -169,14 +169,27 @@ class ConversationManager:
             if DatabaseManager.has_user_connection(state.session_id):
                 logger.info("User has database connected - using unified agent with user data")
                 
-                # Get comprehensive business data using the available methods
-                business_data = {
-                    "sales_data": database_manager.get_data(state.session_id, "sales_data"),
-                    "product_data": database_manager.get_data(state.session_id, "product_data"),
-                    "inventory_data": database_manager.get_data(state.session_id, "inventory_data"),
-                    "customer_data": database_manager.get_data(state.session_id, "customer_data"),
-                    "revenue_data": database_manager.get_data(state.session_id, "revenue_data"),
-                }
+                # Intelligently fetch only relevant data based on query keywords
+                query_lower = state.query.lower()
+                business_data = {}
+                
+                # Always include sales data as it's the most common
+                business_data["sales_data"] = database_manager.get_data(state.session_id, "sales_data")
+                
+                # Fetch campaign data if query mentions campaigns, marketing, ads, or ROAS
+                if any(keyword in query_lower for keyword in ['campaign', 'marketing', 'ad', 'roas', 'spend', 'advertising']):
+                    business_data["campaign_data"] = database_manager.get_data(state.session_id, "campaign_data")
+                    logger.info("Fetching campaign data based on query keywords")
+                
+                # Fetch inventory data if query mentions inventory, stock, or products
+                if any(keyword in query_lower for keyword in ['inventory', 'stock', 'product', 'reorder', 'out of stock']):
+                    business_data["inventory_data"] = database_manager.get_data(state.session_id, "inventory_data")
+                    logger.info("Fetching inventory data based on query keywords")
+                
+                # Fetch customer data if query mentions customers, users, or retention
+                if any(keyword in query_lower for keyword in ['customer', 'user', 'client', 'retention', 'churn', 'lifetime']):
+                    business_data["customer_data"] = database_manager.get_data(state.session_id, "customer_data")
+                    logger.info("Fetching customer data based on query keywords")
                 
                 # Create unified agent with all tools available
                 unified_agent = UnifiedBusinessAgent(session_id=state.session_id)

@@ -277,23 +277,35 @@ class DatabaseManager:
 
             # Define queries for different data types using session schema
             queries = cls._get_data_queries(query_type, session_id)
+            
+            if not queries:
+                logger.warning(f"No queries generated for {query_type} with session {session_id}")
+                cursor.close()
+                conn.close()
+                return []
+            
+            logger.info(f"Trying {len(queries)} query templates for {query_type}")
 
             results = []
-            for query in queries:
+            for idx, query in enumerate(queries):
                 try:
+                    logger.debug(f"Attempting query {idx + 1}/{len(queries)} for {query_type}: {query[:100]}...")
                     cursor.execute(query)
                     query_results = cursor.fetchall()
                     # Convert RealDictRow to regular dict
                     results.extend([dict(row) for row in query_results])
-                    logger.info(f"Executed query for {query_type}: {len(query_results)} rows returned")
+                    logger.info(f"✓ Successfully executed query for {query_type}: {len(query_results)} rows returned")
                     # If we got results, stop trying other queries
                     if results:
                         break
                 except psycopg2.Error as e:
                     # Rollback the failed transaction so we can try the next query
                     conn.rollback()
-                    logger.debug(f"Query attempt failed for {query_type}, trying next query template")
+                    logger.warning(f"✗ Query {idx + 1} failed for {query_type}: {str(e)[:100]}")
                     continue  # Try next query if one fails
+            
+            if not results:
+                logger.warning(f"No results found for {query_type} after trying all {len(queries)} queries")
 
             cursor.close()
             conn.close()
@@ -318,9 +330,16 @@ class DatabaseManager:
             if connection_info:
                 table_info = connection_info.get('table_info', {})
                 if table_info:
-                    return cls._generate_dynamic_queries(query_type, table_info)
+                    logger.info(f"Using dynamic queries for {query_type} based on detected schema")
+                    dynamic_queries = cls._generate_dynamic_queries(query_type, table_info)
+                    if dynamic_queries:
+                        logger.info(f"Generated {len(dynamic_queries)} dynamic queries for {query_type}")
+                        return dynamic_queries
+                    else:
+                        logger.warning(f"No dynamic queries generated for {query_type}, falling back to templates")
 
         # Fallback to template queries if no schema detected
+        logger.info(f"Using template queries for {query_type}")
 
         # Common table name variations for each data type
         query_templates = {
@@ -553,6 +572,27 @@ class DatabaseManager:
                 if any(keyword in table_lower for keyword in ['inventory', 'stock', 'product']):
                     query = f"SELECT * FROM {table_name} LIMIT 100"
                     queries.append(query)
+
+        elif query_type == "campaign_data":
+            # Look for campaign/marketing-related tables
+            for table_name, columns in table_info.items():
+                table_lower = table_name.lower()
+                if any(keyword in table_lower for keyword in ['campaign', 'marketing', 'ad', 'promo']):
+                    column_names = [col['name'] for col in columns]
+                    
+                    # Try to find a date column for filtering and ordering
+                    date_cols = [col for col in column_names if any(date_word in col.lower() for date_word in ['date', 'time', 'created', 'updated', 'start', 'launch'])]
+                    
+                    # Always add unfiltered query first (most reliable)
+                    query_unfiltered = f"SELECT * FROM {table_name} ORDER BY {column_names[0]} LIMIT 500"
+                    queries.append(query_unfiltered)
+                    logger.info(f"Generated unfiltered campaign query: {query_unfiltered}")
+                    
+                    # Also add date-filtered query if date column exists (as a second option)
+                    if date_cols:
+                        query_filtered = f"SELECT * FROM {table_name} WHERE {date_cols[0]} >= NOW() - INTERVAL '90 days' ORDER BY {date_cols[0]} DESC LIMIT 500"
+                        queries.append(query_filtered)
+                        logger.info(f"Generated date-filtered campaign query using column '{date_cols[0]}': {query_filtered}")
 
         return queries
 

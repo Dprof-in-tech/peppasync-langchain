@@ -11,6 +11,8 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 import urllib.parse
+import pandas as pd
+from datetime import datetime
 
 # Load environment variables once
 load_dotenv()
@@ -536,6 +538,35 @@ class DatabaseManager:
                 WHERE (revenue/ad_spend) < 2.0
                 ORDER BY (revenue/ad_spend) ASC
                 """
+            ],
+            "website_engagement_data": [
+                """
+                SELECT
+                    lead_id,
+                    page_views,
+                    time_on_site,
+                    pricing_page_views
+                FROM website_engagement
+                """
+            ],
+            "customer_purchase_history": [
+                """
+                SELECT
+                    o.order_date,
+                    p.product_name,
+                    oi.quantity,
+                    oi.price
+                FROM
+                    orders o
+                JOIN
+                    order_items oi ON o.order_id = oi.order_id
+                JOIN
+                    products p ON oi.product_id = p.product_id
+                WHERE
+                    o.customer_id = %s
+                ORDER BY
+                    o.order_date DESC
+                """
             ]
         }
 
@@ -691,10 +722,42 @@ class DatabaseManager:
             }
 
     @classmethod
-    def _get_mock_data_by_type(cls, query_type: str) -> List[Dict[str, Any]]:
-        """Get mock data by specific type"""
-        mock_data = cls.get_mock_data()
-        return mock_data.get(query_type, [])
+    def get_database_schema(cls, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get the schema of the user's database."""
+        connection_info = cls.get_user_connection(session_id)
+        if not connection_info or not connection_info.get('database_url'):
+            return None
+
+        db_url = connection_info.get('database_url')
+        try:
+            parsed_url = urllib.parse.urlparse(db_url)
+            conn = psycopg2.connect(
+                host=parsed_url.hostname,
+                port=parsed_url.port or 5432,
+                database=parsed_url.path.lstrip('/'),
+                user=parsed_url.username,
+                password=parsed_url.password
+            )
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            cursor.execute("""
+                SELECT table_name, column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                ORDER BY table_name, ordinal_position;
+            """)
+            schema = {}
+            for row in cursor.fetchall():
+                if row['table_name'] not in schema:
+                    schema[row['table_name']] = []
+                schema[row['table_name']].append(f"{row['column_name']} ({row['data_type']})")
+
+            cursor.close()
+            conn.close()
+            return schema
+        except Exception as e:
+            logger.error(f"Error getting database schema: {e}")
+            return None
 
     @staticmethod
     def get_mock_data() -> Dict[str, Any]:

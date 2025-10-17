@@ -4,6 +4,7 @@ All shared configurations, LLM instances, and database connections
 """
 import os
 import logging
+import json
 from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -11,6 +12,8 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 import urllib.parse
+import pandas as pd
+from datetime import datetime
 
 # Load environment variables once
 load_dotenv()
@@ -126,6 +129,26 @@ class LLMManager:
         cls._embeddings_instance = None
 
 class DatabaseManager:
+    @classmethod
+    def remove_shopify_session(cls, session_id: str):
+        """
+        Remove Shopify connection and orders for a session (disconnect Shopify).
+        """
+        redis_manager = cls._get_redis_manager()
+        conn_key = f"shopify:{session_id}"
+        orders_key = f"shopify:orders:{session_id}"
+        # Remove from Redis
+        if redis_manager and redis_manager.is_available():
+            redis_manager.delete(conn_key)
+            redis_manager.delete(orders_key)
+            logger.info(f"Shopify session deleted from Redis: {session_id}")
+        # Remove from in-memory
+        if conn_key in cls._user_connections:
+            del cls._user_connections[conn_key]
+            logger.info(f"Shopify connection deleted from memory: {session_id}")
+        if orders_key in cls._user_connections:
+            del cls._user_connections[orders_key]
+            logger.info(f"Shopify orders deleted from memory: {session_id}")
     """Database connection manager with support for user database connections"""
 
     _user_connections: Dict[str, Dict[str, Any]] = {}  # Fallback in-memory storage
@@ -215,7 +238,7 @@ class DatabaseManager:
             logger.info(f"Session deleted from memory: {session_id}")
 
     @classmethod
-    def get_data(cls, session_id: str, query_type: str, use_mock: bool = False) -> List[Dict[str, Any]]:
+    def get_data(cls, session_id: str, query_type: str, use_mock: bool = False, lookback_days: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Get data based on session and query type
 
@@ -223,19 +246,20 @@ class DatabaseManager:
             session_id: Session identifier
             query_type: Type of data requested (sales_data, inventory_data, etc.)
             use_mock: Force use of mock data for testing
+            lookback_days: Optional number of days to look back for time-series data
 
         Returns:
             List of data records
         """
         # If user has connected their database and use_mock is False
         if not use_mock and cls.has_user_connection(session_id):
-            return cls._get_user_data(session_id, query_type)
+            return cls._get_user_data(session_id, query_type, lookback_days=lookback_days)
         else:
             # Fall back to mock data
             return cls._get_mock_data_by_type(query_type)
 
     @classmethod
-    def _get_user_data(cls, session_id: str, query_type: str) -> List[Dict[str, Any]]:
+    def _get_user_data(cls, session_id: str, query_type: str, lookback_days: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get data from user's connected database"""
         try:
             connection_info = cls.get_user_connection(session_id)
@@ -250,14 +274,14 @@ class DatabaseManager:
                 return []
 
             # Connect to PostgreSQL and query data
-            return cls._query_postgres_database(db_url, query_type, session_id)
+            return cls._query_postgres_database(db_url, query_type, session_id, lookback_days=lookback_days)
 
         except Exception as e:
             logger.error(f"Error getting user data: {e}")
             return []
 
     @classmethod
-    def _query_postgres_database(cls, db_url: str, query_type: str, session_id: str = None) -> List[Dict[str, Any]]:
+    def _query_postgres_database(cls, db_url: str, query_type: str, session_id: str = None, lookback_days: Optional[int] = None) -> List[Dict[str, Any]]:
         """Query PostgreSQL database for specific data type"""
         try:
             # Parse the database URL
@@ -276,7 +300,7 @@ class DatabaseManager:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # Define queries for different data types using session schema
-            queries = cls._get_data_queries(query_type, session_id)
+            queries = cls._get_data_queries(query_type, session_id, lookback_days=lookback_days)
             
             if not queries:
                 logger.warning(f"No queries generated for {query_type} with session {session_id}")
@@ -320,7 +344,7 @@ class DatabaseManager:
             return []
 
     @classmethod
-    def _get_data_queries(cls, query_type: str, session_id: str = None) -> List[str]:
+    def _get_data_queries(cls, query_type: str, session_id: str = None, lookback_days: Optional[int] = None) -> List[str]:
         """Get SQL queries for different data types using detected schema"""
 
         # Try to get the detected schema for this session
@@ -331,7 +355,7 @@ class DatabaseManager:
                 table_info = connection_info.get('table_info', {})
                 if table_info:
                     logger.info(f"Using dynamic queries for {query_type} based on detected schema")
-                    dynamic_queries = cls._generate_dynamic_queries(query_type, table_info)
+                    dynamic_queries = cls._generate_dynamic_queries(query_type, table_info, lookback_days=lookback_days)
                     if dynamic_queries:
                         logger.info(f"Generated {len(dynamic_queries)} dynamic queries for {query_type}")
                         return dynamic_queries
@@ -536,13 +560,42 @@ class DatabaseManager:
                 WHERE (revenue/ad_spend) < 2.0
                 ORDER BY (revenue/ad_spend) ASC
                 """
+            ],
+            "website_engagement_data": [
+                """
+                SELECT
+                    lead_id,
+                    page_views,
+                    time_on_site,
+                    pricing_page_views
+                FROM website_engagement
+                """
+            ],
+            "customer_purchase_history": [
+                """
+                SELECT
+                    o.order_date,
+                    p.product_name,
+                    oi.quantity,
+                    oi.price
+                FROM
+                    orders o
+                JOIN
+                    order_items oi ON o.order_id = oi.order_id
+                JOIN
+                    products p ON oi.product_id = p.product_id
+                WHERE
+                    o.customer_id = %s
+                ORDER BY
+                    o.order_date DESC
+                """
             ]
         }
 
         return query_templates.get(query_type, [])
 
     @classmethod
-    def _generate_dynamic_queries(cls, query_type: str, table_info: Dict) -> List[str]:
+    def _generate_dynamic_queries(cls, query_type: str, table_info: Dict, lookback_days: Optional[int] = None) -> List[str]:
         """Generate SQL queries based on detected database schema"""
         queries = []
 
@@ -550,19 +603,61 @@ class DatabaseManager:
             # Look for sales-related tables
             for table_name, columns in table_info.items():
                 table_lower = table_name.lower()
-                if any(keyword in table_lower for keyword in ['sale', 'order', 'transaction', 'purchase']):
-                    column_names = [col['name'] for col in columns]
+                if any(keyword in table_lower for keyword in ['sale', 'orders', 'transaction', 'purchase']):
+                    original_column_names = [col['name'] for col in columns]
+                    lower_column_names = [col['name'].lower() for col in columns]
 
-                    # Try to find a date column for filtering and ordering
-                    date_cols = [col for col in column_names if any(date_word in col.lower() for date_word in ['date', 'time', 'created', 'updated'])]
+                    # Define mappings for expected columns
+                    col_mappings = {
+                        'product_id': ['product_id', 'item_id', 'sku'],
+                        'product_name': ['product_name', 'name', 'item_name', 'product_title'],
+                        'total_amount': ['total_amount', 'sales_amount', 'amount', 'price', 'revenue'],
+                        'quantity': ['quantity', 'units_sold', 'qty', 'units'],
+                        'order_date': ['order_date', 'sale_date', 'created_at', 'transaction_date', 'date']
+                    }
 
-                    if date_cols:
-                        # Add 30-day filter and order by date
-                        query = f"SELECT * FROM {table_name} WHERE {date_cols[0]} >= NOW() - INTERVAL '30 days' ORDER BY {date_cols[0]} DESC LIMIT 1000"
+                    # Find the actual column names from the table
+                    select_clauses = []
+                    found_cols = {}
+                    for target_col, possible_names in col_mappings.items():
+                        for name in possible_names:
+                            try:
+                                idx = lower_column_names.index(name)
+                                original_name = original_column_names[idx]
+                                select_clauses.append(f'"{original_name}" as {target_col}')
+                                found_cols[target_col] = original_name
+                                break
+                            except ValueError:
+                                continue
+                    
+                    # If we have the essential columns, build the query
+                    if 'product_name' in found_cols and 'total_amount' in found_cols:
+                        select_statement = ", ".join(select_clauses)
+                        
+                        date_col = found_cols.get('order_date')
+                        days = lookback_days or 30
+                        
+                        if date_col:
+                            query = f'SELECT {select_statement} FROM "{table_name}" WHERE "{date_col}" >= NOW() - INTERVAL \'{days} days\' ORDER BY "{date_col}" DESC LIMIT 1000'
+                        else:
+                            query = f'SELECT {select_statement} FROM "{table_name}" LIMIT 1000'
+                        
+                        queries.append(query)
                     else:
-                        # No date column found, just limit results
-                        query = f"SELECT * FROM {table_name} ORDER BY {column_names[0]} LIMIT 1000"
-
+                        # Fallback to SELECT * if we can't map columns
+                        date_cols = [col['name'] for col in columns if any(date_word in col['name'].lower() for date_word in ['date', 'time', 'created', 'updated'])]
+                        days = lookback_days or 30
+                        if date_cols:
+                            query = f'SELECT * FROM "{table_name}" WHERE "{date_cols[0]}" >= NOW() - INTERVAL \'{days} days\' ORDER BY "{date_cols[0]}" DESC LIMIT 1000'
+                        else:
+                            query = f'SELECT * FROM "{table_name}" ORDER BY "{columns[0]["name"]}" LIMIT 1000'
+                        queries.append(query)
+        elif query_type == "customer_data":
+            #look for customer-related tables
+            for table_name, columns in table_info.items():
+                table_lower = table_name.lower()
+                if any(keyword in table_lower for keyword in ['customers', 'users', 'clients']):
+                    query = f"SELECT * FROM {table_name} ORDER BY {columns[0]['name']} DESC LIMIT 1000"
                     queries.append(query)
 
         elif query_type == "inventory_data":
@@ -691,8 +786,46 @@ class DatabaseManager:
             }
 
     @classmethod
+    def get_database_schema(cls, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get the schema of the user's database."""
+        connection_info = cls.get_user_connection(session_id)
+        if not connection_info or not connection_info.get('database_url'):
+            return None
+
+        db_url = connection_info.get('database_url')
+        try:
+            parsed_url = urllib.parse.urlparse(db_url)
+            conn = psycopg2.connect(
+                host=parsed_url.hostname,
+                port=parsed_url.port or 5432,
+                database=parsed_url.path.lstrip('/'),
+                user=parsed_url.username,
+                password=parsed_url.password
+            )
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            cursor.execute("""
+                SELECT table_name, column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                ORDER BY table_name, ordinal_position;
+            """)
+            schema = {}
+            for row in cursor.fetchall():
+                if row['table_name'] not in schema:
+                    schema[row['table_name']] = []
+                schema[row['table_name']].append(f"{row['column_name']} ({row['data_type']})")
+
+            cursor.close()
+            conn.close()
+            return schema
+        except Exception as e:
+            logger.error(f"Error getting database schema: {e}")
+            return None
+
+    @classmethod
     def _get_mock_data_by_type(cls, query_type: str) -> List[Dict[str, Any]]:
-        """Get mock data by specific type"""
+        """Get mock data for a specific query type"""
         mock_data = cls.get_mock_data()
         return mock_data.get(query_type, [])
 
@@ -795,3 +928,123 @@ class DatabaseManager:
                 }
             ]
         }
+
+    # ===========================
+    # SHOPIFY INTEGRATION METHODS
+    # ===========================
+
+    @classmethod
+    def store_shopify_connection(cls, session_id: str, shop_name: str, connection_data: Dict[str, Any]):
+        """
+        Store Shopify connection info for a session.
+
+        Args:
+            session_id: User session ID
+            shop_name: Shopify store name
+            connection_data: Connection result from Shopify service
+        """
+        redis_manager = cls._get_redis_manager()
+        key = f"shopify:{session_id}"
+
+        shopify_info = {
+            "shop_name": shop_name,
+            "connected_at": datetime.now().isoformat(),
+            "connection_data": connection_data
+        }
+
+        if redis_manager and redis_manager.is_available():
+            redis_manager.set(
+                key,
+                json.dumps(shopify_info),
+                ttl=86400 * 30  # 30 days TTL
+            )
+            logger.info(f"✅ Shopify connection stored in Redis for {shop_name}")
+        else:
+            # Fallback to in-memory
+            cls._user_connections[f"shopify:{session_id}"] = shopify_info
+            logger.info(f"✅ Shopify connection stored in memory for {shop_name}")
+
+    @classmethod
+    def get_shopify_connection(cls, session_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get Shopify connection info for a session.
+
+        Args:
+            session_id: User session ID
+
+        Returns:
+            Shopify connection data or None
+        """
+        redis_manager = cls._get_redis_manager()
+        key = f"shopify:{session_id}"
+
+        if redis_manager and redis_manager.is_available():
+            data = redis_manager.get(key)
+            if data:
+                return json.loads(data)
+
+        # Fallback to in-memory
+        return cls._user_connections.get(f"shopify:{session_id}")
+
+    @classmethod
+    def store_shopify_orders(cls, session_id: str, orders: List[Dict[str, Any]]):
+        """
+        Store Shopify orders for a session.
+
+        This is used internally after syncing from Shopify.
+        Orders can then be used for forecasting and analytics.
+
+        Args:
+            session_id: User session ID
+            orders: List of standardized order dictionaries
+        """
+        redis_manager = cls._get_redis_manager()
+        key = f"shopify:orders:{session_id}"
+
+        orders_data = {
+            "orders": orders,
+            "synced_at": datetime.now().isoformat(),
+            "count": len(orders)
+        }
+
+        if redis_manager and redis_manager.is_available():
+            redis_manager.set(
+                key,
+                json.dumps(orders_data),
+                ttl=86400 * 7  # 7 days TTL
+            )
+            logger.info(f"✅ Stored {len(orders)} Shopify orders in Redis")
+        else:
+            cls._user_connections[f"shopify:orders:{session_id}"] = orders_data
+            logger.info(f"✅ Stored {len(orders)} Shopify orders in memory")
+
+        # Update connection info with counts
+        connection_info = cls.get_shopify_connection(session_id)
+        if connection_info:
+            connection_info["data_counts"] = connection_info.get("data_counts", {})
+            connection_info["data_counts"]["orders"] = len(orders)
+            connection_info["last_sync"] = datetime.now().isoformat()
+            cls.store_shopify_connection(session_id, connection_info["shop_name"], connection_info)
+
+    @classmethod
+    def get_shopify_orders(cls, session_id: str) -> List[Dict[str, Any]]:
+        """
+        Get stored Shopify orders for a session.
+
+        Args:
+            session_id: User session ID
+
+        Returns:
+            List of orders or empty list
+        """
+        redis_manager = cls._get_redis_manager()
+        key = f"shopify:orders:{session_id}"
+
+        if redis_manager and redis_manager.is_available():
+            data = redis_manager.get(key)
+            if data:
+                return json.loads(data).get("orders", [])
+
+        # Fallback to in-memory
+        orders_data = cls._user_connections.get(f"shopify:orders:{session_id}")
+        return orders_data.get("orders", []) if orders_data else []

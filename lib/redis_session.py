@@ -347,6 +347,78 @@ class RedisSessionManager:
                 'error': f'Unexpected error: {str(e)}'
             }
 
+    def set(self, key: str, value: str, ttl: Optional[int] = None) -> bool:
+        """
+        Generic set operation for Redis (used by Shopify, etc.)
+
+        Args:
+            key: Redis key
+            value: String value to store
+            ttl: Time to live in seconds
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.is_available():
+            logger.warning(f"Redis not available for set operation: {key}")
+            return False
+
+        try:
+            if ttl:
+                self._redis_client.setex(key, ttl, value)
+            else:
+                self._redis_client.set(key, value)
+            return True
+        except RedisError as e:
+            logger.error(f"Error setting key {key} in Redis: {e}")
+            return False
+
+    def get(self, key: str) -> Optional[str]:
+        """
+        Generic get operation for Redis (used by Shopify, etc.)
+
+        Args:
+            key: Redis key
+
+        Returns:
+            String value or None if not found
+        """
+        if not self.is_available():
+            logger.warning(f"Redis not available for get operation: {key}")
+            return None
+
+        try:
+            return self._redis_client.get(key)
+        except RedisError as e:
+            logger.error(f"Error getting key {key} from Redis: {e}")
+            return None
+
+    def delete(self, key: str) -> bool:
+        """
+        Generic delete operation for Redis (used by Shopify, etc.)
+
+        Args:
+            key: Redis key to delete
+
+        Returns:
+            True if deleted, False otherwise
+        """
+        if not self.is_available():
+            logger.warning(f"Redis not available for delete operation: {key}")
+            return False
+
+        try:
+            deleted = self._redis_client.delete(key)
+            if deleted:
+                logger.info(f"Key deleted from Redis: {key}")
+                return True
+            else:
+                logger.debug(f"Key not found for deletion: {key}")
+                return False
+        except RedisError as e:
+            logger.error(f"Error deleting key {key} from Redis: {e}")
+            return False
+
     def close(self):
         """Close Redis connection"""
         if self._redis_client:

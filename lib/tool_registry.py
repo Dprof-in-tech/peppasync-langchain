@@ -4,22 +4,28 @@ Centralized registry of all available tools and their configurations
 """
 from typing import Dict, Any, List
 from .tools.insight_tool import InsightGenerationTool
+from .tools.forecast_tool import DemandForecastTool
+from .tools.customer_insights_tool import CustomerInsightsTool
 
 class ToolRegistry:
     """Centralized registry for all business intelligence tools"""
 
     @staticmethod
     def get_all_tools() -> Dict[str, Any]:
-        """Get all available tools - now just the unified analysis tool"""
+        """Get all available tools including demand forecasting"""
         return {
-            "unified_analysis": InsightGenerationTool()
+            "unified_analysis": InsightGenerationTool(),
+            "demand_forecast": DemandForecastTool(),
+            "customer_insights": CustomerInsightsTool(),
         }
     
     @staticmethod
     def get_tool_descriptions() -> Dict[str, str]:
         """Get descriptions of all tools"""
         return {
-            "unified_analysis": "Unified business analysis tool - generates insights, recommendations, and alerts in one pass"
+            "unified_analysis": "Unified business analysis tool - generates insights, recommendations, and alerts in one pass",
+            "demand_forecast": "Demand forecasting tool - predicts future demand using Prophet, validates with exponential smoothing, and provides supply chain recommendations",
+            "customer_insights": "Analyzes customer data to provide insights on sales and customer intelligence.",
         }
     
     @staticmethod

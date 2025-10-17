@@ -21,3 +21,19 @@ aiohttp>=3.9.0
 beautifulsoup4>=4.12.0
 redis>=5.0.0
 hiredis>=2.3.0
+
+# Demand Forecasting
+prophet>=1.1.7
+numpy>=1.24.0
+statsmodels>=0.14.0
+scikit-learn>=1.3.0
+
+# Shopify Integration (using httpx instead of outdated ShopifyAPI)
+# ShopifyAPI doesn't support Python 3.13 - using direct REST API calls
+
+# Tavily MCP for Web Search
+tavily-python>=0.3.0
+
+# Kaggle Dataset (with pandas support)
+kagglehub[pandas-datasets]>=0.2.0
+openpyxl

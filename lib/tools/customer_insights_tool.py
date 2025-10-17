@@ -115,9 +115,42 @@ class CustomerInsightsTool(BaseTool):
         """Handles generic customer-related queries."""
         # For now, this is a placeholder. In a real implementation, this would
         # also use an LLM to parse the query and construct a SQL query.
+
+        db_manager = DatabaseManager()
+        db_schema = db_manager.get_database_schema(session_id=session_id)
+
+        llm = LLMManager.get_chat_llm()
+        prompt = f"""Understand what this query is actually talking about and what data is needed to answer the query. "{query}"
+
+        You will also be given the database schema "{db_schema}"
+        generate the appropriate query required to retrieve the needed data from the database so you can answer this question.
+
+        Respond with a JSON object with the following keys:
+        - "user_query_summary": a detailed summary of what the user prompt actually means with possible guides to answering the user question.
+        - "db_query": the query to use to fetch the required data from the db if needed. 
+        """
+        response = llm.invoke(prompt)
+
+        results = db_manager._query_postgres_database(db_manager.get_user_connection(session_id)['database_url'], "customer_data", session_id)
+
+        prompt1 = f"""Here is the response of the first llm call to understand the user query and fetch the required data from the database.
+        "{response}", "{results}", 
+        Here is the original query.
+        "{query}"
+
+        using all the information above, answer the users query in a very detailed and targeted manner. do not hallucinate or give wrong answers.
+        Do not make up any data, only use the data provided in the results above to answer the query.
+        Be straight to the point and concise when answering the query. 
+
+        return the response in json format with the following keys:
+        - "success": boolean, true if the query was answered successfully, false otherwise.
+        - "insights": string, the detailed but concise answer to the user's query.
+
+        """
+        main_response = llm.invoke(prompt1)
         return json.dumps({
             "success": True,
-            "insights": f"This is a placeholder response for the query: '{query}'"
+            "insights": main_response.content
         }, indent=2)
 
     async def _arun(

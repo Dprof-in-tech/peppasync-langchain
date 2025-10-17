@@ -98,6 +98,7 @@ class ChatRequest(BaseModel):
 
 class AnalyticsRequest(BaseModel):
     filters: Optional[Dict[str, Any]] = {}
+    data_source: Optional[str] = "postgres"  # "postgres" or "shopify"
 
 class PromptRequest(BaseModel):
     prompt: str
@@ -157,83 +158,108 @@ async def enhanced_chat(request: ChatRequest):
 dashboard_cache = {}
 CACHE_DURATION = 30  # 30 seconds
 
+
 @app.post("/analytics/dashboard")
 async def get_dashboard_analytics(request: AnalyticsRequest):
-    """Get dashboard analytics data for connected database or mock data"""
+    """Get dashboard analytics data for connected database or Shopify"""
     try:
         session_id = request.filters.get('session_id') if request.filters else None
-        
-        # Check cache first
-        cache_key = f"dashboard_{session_id}"
+        data_source = request.data_source or "postgres"
+        cache_key = f"dashboard_{data_source}_{session_id}"
         current_time = time.time()
-        
+
         if cache_key in dashboard_cache:
             cached_data, cache_time = dashboard_cache[cache_key]
             if current_time - cache_time < CACHE_DURATION:
-                logger.info(f"Returning cached dashboard data for session: {session_id}")
+                logger.info(f"Returning cached dashboard data for session: {session_id} [{data_source}]")
                 return cached_data
-        
-        # Get specific data for dashboard widgets with fallback logic (no AI calls needed)
-        sales_data = DatabaseManager.get_data(session_id=session_id, query_type="sales_data", use_mock=False)
-        
-        # If no real sales data, fallback to mock data for demo purposes
-        if not sales_data:
-            logger.info("No real sales data found, using mock data for dashboard")
-            sales_data = DatabaseManager.get_data(session_id=session_id, query_type="sales_data", use_mock=True)
-        
-        inventory_data = DatabaseManager.get_data(session_id=session_id, query_type="inventory_data", use_mock=False)
-        if not inventory_data:
-            inventory_data = DatabaseManager.get_data(session_id=session_id, query_type="inventory_data", use_mock=True)
-            
-        campaign_data = DatabaseManager.get_data(session_id=session_id, query_type="campaign_data", use_mock=False)
-        if not campaign_data:
-            campaign_data = DatabaseManager.get_data(session_id=session_id, query_type="campaign_data", use_mock=True)
 
-        # Debug logging
-        logger.info(f"Dashboard analytics - Session: {session_id}")
-        logger.info(f"Sales data count: {len(sales_data)}")
-        logger.info(f"Sample sales data: {sales_data[:2] if sales_data else 'No data'}")
-        logger.info(f"Inventory data count: {len(inventory_data)}")
-        logger.info(f"Campaign data count: {len(campaign_data)}")
+        # Branch logic for data source
+        if data_source == "shopify":
+            # Get Shopify orders and normalize to sales_data
+            shopify_orders = DatabaseManager.get_shopify_orders(session_id)
+            # Normalize Shopify orders to sales_data structure
+            sales_data = [
+                {
+                    'product_name': o.get('line_items', [{}])[0].get('title', 'Unknown') if o.get('line_items') else 'Unknown',
+                    'sales_amount': float(o.get('total_price', 0)),
+                    'units_sold': sum([li.get('quantity', 0) for li in o.get('line_items', [])]),
+                    'category': o.get('line_items', [{}])[0].get('product_type', 'Shopify') if o.get('line_items') else 'Shopify',
+                    'profit_margin': None,
+                    'sale_date': o.get('created_at')
+                }
+                for o in shopify_orders
+            ]
+            # Inventory and campaign data from Shopify not implemented (could be added if available)
+            inventory_data = []
+            campaign_data = []
+        else:
+            # Default: Postgres
+            sales_data = DatabaseManager.get_data(session_id=session_id, query_type="sales_data", use_mock=False)
+            if not sales_data:
+                logger.info("No real sales data found, using mock data for dashboard")
+                sales_data = DatabaseManager.get_data(session_id=session_id, query_type="sales_data", use_mock=True)
+            inventory_data = DatabaseManager.get_data(session_id=session_id, query_type="inventory_data", use_mock=False)
+            if not inventory_data:
+                inventory_data = DatabaseManager.get_data(session_id=session_id, query_type="inventory_data", use_mock=True)
+            campaign_data = DatabaseManager.get_data(session_id=session_id, query_type="campaign_data", use_mock=False)
+            if not campaign_data:
+                campaign_data = DatabaseManager.get_data(session_id=session_id, query_type="campaign_data", use_mock=True)
 
         # Calculate key metrics with flexible field mapping
         def get_sales_amount(item):
-            # Try different possible field names for sales amount
-            return (item.get('sales_amount') or 
-                   item.get('amount') or 
-                   item.get('total_amount') or 
-                   item.get('revenue') or 
-                   item.get('total') or 0)
+            amount = (
+                item.get('sales_amount') or
+                item.get('amount') or
+                item.get('total_amount') or
+                item.get('revenue') or
+                item.get('total')
+            )
+            if not amount and ('price' in item and 'quantity' in item):
+                amount = item['price'] * item['quantity']
+            return amount or 0
 
         def get_units_sold(item):
-            # Try different possible field names for units sold
-            return (item.get('units_sold') or 
-                   item.get('quantity') or 
-                   item.get('qty') or 
-                   item.get('units') or 0)
+            return (
+                item.get('units_sold') or
+                item.get('quantity') or
+                item.get('qty') or
+                item.get('units') or 0
+            )
 
         total_revenue = sum(get_sales_amount(item) for item in sales_data)
         total_units = sum(get_units_sold(item) for item in sales_data)
         avg_order_value = total_revenue / len(sales_data) if sales_data else 0
-        
-        logger.info(f"Calculated metrics - Revenue: {total_revenue}, Units: {total_units}, AOV: {avg_order_value}")
-        
-        # Low stock items
-        low_stock_items = [
-            item for item in inventory_data 
-            if item.get('current_stock', 0) < item.get('reorder_level', 0)
-        ]
-        
-        # Campaign performance with flexible field mapping
-        def get_roas(item):
-            return (item.get('roas') or 
-                   item.get('return_on_ad_spend') or 
-                   (item.get('revenue', 0) / max(item.get('spend', 1), 1)) or 0)
+
+        logger.info(f"Calculated metrics - Revenue: {total_revenue}, Units: {total_units}, AOV: {avg_order_value} [{data_source}]")
+
+        # Low stock items (only for Postgres for now)
+        low_stock_items = []
+        if data_source == "postgres":
+            low_stock_items = [
+                item for item in inventory_data
+                if item.get('quantity', 0) < item.get('reorder_level', 10)
+            ]
+
+        # Campaign performance (only for Postgres for now)
+        def get_revenue(item):
+            try:
+                return float(item.get('revenue') or 0)
+            except ValueError:
+                return 0
 
         def get_spend(item):
-            return (item.get('spend') or 
-                   item.get('ad_spend') or 
-                   item.get('cost') or 0)
+            try:
+                return float(item.get('spend') or item.get('ad_spend') or item.get('cost') or 0)
+            except ValueError:
+                return 0
+
+        def get_roas(item):
+            spend = get_spend(item)
+            revenue = get_revenue(item)
+            if spend > 0:
+                return revenue / spend
+            return 0
 
         avg_roas = sum(get_roas(item) for item in campaign_data) / len(campaign_data) if campaign_data else 0
         total_ad_spend = sum(get_spend(item) for item in campaign_data)
@@ -248,17 +274,23 @@ async def get_dashboard_analytics(request: AnalyticsRequest):
                 "average_roas": avg_roas,
                 "total_ad_spend": total_ad_spend
             },
-            "sales_data": sales_data[-10:],  # Last 10 sales
-            "inventory_alerts": low_stock_items[:5],  # Top 5 low stock items
-            "top_campaigns": sorted(campaign_data, key=lambda x: x.get('roas', 0), reverse=True)[:3],
+            "sales_data": sales_data[-10:],
+            "inventory_alerts": low_stock_items[:5],
+            "top_campaigns": sorted(
+                [
+                    {**c, "roas": round(get_roas(c), 2)}
+                    for c in campaign_data
+                ],
+                key=lambda x: x["roas"],
+                reverse=True
+            )[:3],
             "last_updated": int(time.time()),
-            "session_id": session_id
+            "session_id": session_id,
+            "data_source": data_source
         }
 
-        # Cache the response
         dashboard_cache[cache_key] = (response_data, current_time)
-        logger.info(f"Cached dashboard data for session: {session_id}")
-
+        logger.info(f"Cached dashboard data for session: {session_id} [{data_source}]")
         return response_data
 
     except Exception as e:
@@ -718,6 +750,291 @@ async def disconnect_database(session_id: str):
 
 
 # ===========================
+# SHOPIFY INTEGRATION ENDPOINTS
+# ===========================
+
+class ShopifyConnectRequest(BaseModel):
+    shop_name: str
+    session_id: str
+    redirect_url: str
+    bearer_token: Optional[str] = None
+
+
+@app.post("/shopify/connect")
+async def connect_shopify(request: ShopifyConnectRequest):
+    """Connect to Shopify store and sync data"""
+    try:
+        from lib.shopify_service import get_shopify_service
+
+        logger.info(f"Connecting Shopify store: {request.shop_name} for session {request.session_id}")
+
+        shopify_service = get_shopify_service()
+
+        # Call external connector API
+        result = await shopify_service.connect_shopify_store(
+            shop_name=request.shop_name,
+            redirect_url=request.redirect_url,
+            bearer_token=request.bearer_token
+        )
+
+        if result.get("success"):
+            # Store connection info
+            connection_data = {
+                "shop_name": request.shop_name,
+                "connected_at": time.time(),
+                "redirect_url": request.redirect_url
+            }
+            DatabaseManager.store_shopify_connection(
+                request.session_id,
+                request.shop_name,
+                connection_data
+            )
+
+            return {
+                "success": True,
+                "message": f"Shopify store {request.shop_name} connected successfully",
+                "session_id": request.session_id,
+                "auth_url": result.get("data", {}).get("auth_url"),
+                "shop_name": request.shop_name
+            }
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "success": False,
+                    "message": result.get("error", "Failed to connect Shopify store"),
+                    "session_id": request.session_id
+                }
+            )
+
+    except Exception as e:
+        logger.error(f"Error connecting Shopify: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "success": False,
+                "message": "Failed to connect Shopify store",
+                "error": str(e),
+                "session_id": request.session_id
+            }
+        )
+
+
+@app.get("/shopify/status/{session_id}")
+async def get_shopify_status(session_id: str):
+    """Get Shopify connection status for a session and auto-sync if needed"""
+    try:
+        connection = DatabaseManager.get_shopify_connection(session_id)
+
+        if connection:
+            orders = DatabaseManager.get_shopify_orders(session_id)
+            shop_name = connection.get("shop_name")
+
+            # Auto-sync orders if:
+            # 1. Never synced before (no last_sync timestamp), OR
+            # 2. Last sync was more than 1 hour ago
+            should_sync = False
+            last_sync = connection.get("last_sync")
+
+            if not last_sync:
+                # Never synced before - attempt first sync
+                should_sync = True
+                logger.info(f"No sync history for {shop_name}, will attempt initial sync")
+            elif last_sync:
+                time_since_sync = time.time() - last_sync
+                if time_since_sync > 3600:  # 1 hour
+                    should_sync = True
+                    logger.info(f"Last sync was {time_since_sync/60:.1f} minutes ago, will attempt re-sync")
+
+            # Attempt auto-sync if needed
+            if should_sync and shop_name:
+                try:
+                    from lib.shopify_service import get_shopify_service
+                    shopify_service = get_shopify_service()
+
+                    # Check if we have access_token in connection data
+                    # access_token = connection.get("access_token")
+                    access_token = '15|dIKpifYjKg4jlutB5mZidgG9x4x1iDsdHNLPEfgR9f09d70d'
+
+                    if access_token:
+                        logger.info(f"Auto-syncing orders for {shop_name}")
+                        orders_synced = await shopify_service.auto_sync_orders(
+                            shop_name=shop_name,
+                            access_token=access_token,
+                            session_id=session_id,
+                            days_back=90,
+                            limit=250
+                        )
+
+                        # Update last_sync timestamp
+                        connection["last_sync"] = time.time()
+                        DatabaseManager.store_shopify_connection(session_id, shop_name, connection)
+
+                        # Refresh orders after sync
+                        orders = DatabaseManager.get_shopify_orders(session_id)
+                        logger.info(f"✅ Auto-sync completed: {orders_synced} orders synced")
+                    else:
+                        logger.info(f"No access_token available yet for {shop_name}. User may need to complete OAuth.")
+
+                except Exception as sync_err:
+                    logger.warning(f"Auto-sync failed for {shop_name}: {sync_err}")
+                    # Don't fail the status check if sync fails
+
+            return {
+                "connected": True,
+                "shop_name": shop_name,
+                "connected_at": connection.get("connected_at"),
+                "orders_count": len(orders),
+                "last_sync": connection.get("last_sync"),
+                "products_count": connection.get("products_count", 0)
+            }
+        else:
+            return {
+                "connected": False,
+                "message": "No Shopify connection found for this session"
+            }
+
+    except Exception as e:
+        logger.error(f"Error getting Shopify status: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Failed to get Shopify status",
+                "message": str(e)
+            }
+        )
+
+
+@app.post("/shopify/oauth-callback")
+async def shopify_oauth_callback(request: Request):
+    """
+    Callback endpoint for Shopify OAuth completion.
+    The external connector should POST to this endpoint with session_id, shop_name, and access_token.
+    """
+    try:
+        data = await request.json()
+        session_id = data.get("session_id")
+        shop_name = data.get("shop_name")
+        access_token = data.get("access_token")
+
+        if not session_id or not shop_name or not access_token:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "success": False,
+                    "message": "Missing required fields: session_id, shop_name, access_token"
+                }
+            )
+
+        logger.info(f"OAuth callback received for shop: {shop_name}, session: {session_id}")
+
+        # Get existing connection or create new one
+        connection = DatabaseManager.get_shopify_connection(session_id) or {}
+
+        # Update connection with access_token
+        connection.update({
+            "shop_name": shop_name,
+            "access_token": access_token,
+            "oauth_completed": True,
+            "oauth_completed_at": time.time()
+        })
+
+        # Store updated connection
+        DatabaseManager.store_shopify_connection(session_id, shop_name, connection)
+
+        logger.info(f"✅ Access token stored for {shop_name}")
+
+        # Trigger auto-sync immediately
+        try:
+            from lib.shopify_service import get_shopify_service
+            shopify_service = get_shopify_service()
+
+            orders_synced = await shopify_service.auto_sync_orders(
+                shop_name=shop_name,
+                access_token=access_token,
+                session_id=session_id,
+                days_back=90,
+                limit=250
+            )
+
+            connection["last_sync"] = time.time()
+            DatabaseManager.store_shopify_connection(session_id, shop_name, connection)
+
+            logger.info(f"✅ OAuth callback: {orders_synced} orders synced for {shop_name}")
+
+            return {
+                "success": True,
+                "message": f"OAuth completed and {orders_synced} orders synced",
+                "session_id": session_id,
+                "shop_name": shop_name,
+                "orders_synced": orders_synced
+            }
+
+        except Exception as sync_err:
+            logger.warning(f"OAuth callback: sync failed for {shop_name}: {sync_err}")
+            return {
+                "success": True,
+                "message": "OAuth completed but sync failed. Will retry on next status check.",
+                "session_id": session_id,
+                "shop_name": shop_name,
+                "sync_error": str(sync_err)
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in OAuth callback: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "success": False,
+                "message": "OAuth callback failed",
+                "error": str(e)
+            }
+        )
+
+
+@app.post("/shopify/disconnect/{session_id}")
+async def disconnect_shopify(session_id: str):
+    """Disconnect Shopify store from session"""
+    try:
+        connection = DatabaseManager.get_shopify_connection(session_id)
+
+        if connection:
+            DatabaseManager.remove_shopify_session(session_id)
+            logger.info(f"Shopify disconnected for session {session_id}")
+
+            return {
+                "success": True,
+                "message": f"Shopify store disconnected successfully",
+                "session_id": session_id
+            }
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "success": False,
+                    "message": "No Shopify connection found for this session",
+                    "session_id": session_id
+                }
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error disconnecting Shopify: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "success": False,
+                "message": "Failed to disconnect Shopify store",
+                "error": str(e),
+                "session_id": session_id
+            }
+        )
+
+
+# ===========================
 # DEMAND FORECASTING ENDPOINTS
 # ===========================
 
@@ -997,7 +1314,7 @@ async def run_demand_forecast(request: ForecastRequest):
             status_code=500,
             detail={
                 "status": "error",
-                "message": "Demand forecast failed",
+                "message": f"Demand forecast failed: {str(e)}",
                 "session_id": session_id,
                 "error": str(e)
             }
@@ -1099,7 +1416,11 @@ async def root():
             "/forecast": "Run demand forecast with Prophet + validation",
             "/auth/signup": "Register a new user and send OTP",
             "/auth/verify-otp": "Verify OTP for user registration",
-            "/auth/login": "Login user after email verification"
+            "/auth/login": "Login user after email verification",
+            "/shopify/connect": "Connect Shopify store and initiate OAuth",
+            "/shopify/status/{session_id}": "Get Shopify connection status (auto-syncs if needed)",
+            "/shopify/oauth-callback": "OAuth callback endpoint (receives access_token after authorization)",
+            "/shopify/disconnect/{session_id}": "Disconnect Shopify store"
         },
         "timestamp": int(time.time())
     }

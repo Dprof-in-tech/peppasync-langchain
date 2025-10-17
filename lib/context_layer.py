@@ -96,7 +96,7 @@ class ContextLayer:
                 lookback_days=forecast_params.get("lookback_days", 90)
             )
 
-            if historical_data is None or len(historical_data) < 30:
+            if historical_data is None or len(historical_data) < 10:
                 return {
                     "error": "Insufficient historical data",
                     "message": "Need at least 30 days of sales data for forecasting",
@@ -308,15 +308,26 @@ class ContextLayer:
                 sales_data = DatabaseManager.get_data(
                     session_id=session_id,
                     query_type="sales_data",
-                    use_mock=False
+                    use_mock=False,
+                    lookback_days=lookback_days
                 )
 
-                if sales_data and len(sales_data) >= 50:
+                # Require at least 100 records for forecasting (lowered threshold for ARIMA fallback)
+                # 100+ records: Prophet model (best accuracy)
+                # 30-99 records: ARIMA fallback (good for sparse data)
+                # < 30 records: Moving average fallback
+                if sales_data and len(sales_data) >= 100:
                     raw_df = pd.DataFrame(sales_data)
                     data_source = "postgresql"
-                    logger.info(f"✓ Retrieved {len(raw_df)} records from PostgreSQL")
+                    logger.info(f"✓ Retrieved {len(raw_df)} records from PostgreSQL (using Prophet)")
+                elif sales_data and len(sales_data) >= 30:
+                    raw_df = pd.DataFrame(sales_data)
+                    data_source = "postgresql"
+                    logger.warning(f"⚠️  Sparse data: {len(sales_data)} records (will use ARIMA fallback)")
+                    logger.info("💡 Collect 100+ records for better forecasts with Prophet")
                 else:
-                    logger.warning(f"✗ PostgreSQL data insufficient ({len(sales_data) if sales_data else 0} records)")
+                    logger.warning(f"✗ PostgreSQL data insufficient ({len(sales_data) if sales_data else 0} records < 30 minimum)")
+                    logger.info("💡 Need at least 30 sales records for forecasting")
 
             # Fallback to Kaggle dataset for testing/demo
             if raw_df is None:

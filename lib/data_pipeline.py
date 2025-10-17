@@ -351,7 +351,7 @@ class DataPipeline:
         date_col: str = 'Order Date',
         value_col: str = 'Sales',
         freq: str = 'D',
-        fill_method: str = 'zero'
+        fill_method: str = 'interpolate'  # Changed default from 'zero' to 'interpolate'
     ) -> pd.DataFrame:
         """
         Aggregate sales data by time period.
@@ -362,6 +362,9 @@ class DataPipeline:
             value_col: Value column name
             freq: Frequency ('D'=daily, 'W'=weekly, 'M'=monthly)
             fill_method: Method to fill missing dates ('zero', 'forward', 'interpolate')
+                - 'interpolate': Linear interpolation (best for sparse data)
+                - 'forward': Forward fill (use previous value)
+                - 'zero': Fill with zeros (can cause poor forecasts)
 
         Returns:
             Aggregated DataFrame with complete date range

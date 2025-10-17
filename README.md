@@ -14,37 +14,45 @@ graph TD
     B -->|Direct Analysis| D[Retrieve & Generate]
     B -->|Visualization| E[Retrieve & Visualize]
     B -->|Database| F[Database Management]
+    B -->|Shopify| G[Shopify Integration]
 
-    C --> G[Conversation Manager]
-    G --> H[Query Classification]
-    H --> I[LangGraph Workflow]
-    I --> J[Unified Business Agent]
+    C --> H[Conversation Manager]
+    H --> I[Query Classification]
+    I --> J[LangGraph Workflow]
+    J --> K[Unified Business Agent]
 
-    D --> K[GenBISQL Engine]
-    E --> K
+    D --> L[GenBISQL Engine]
+    E --> L
 
-    K --> L[Data Retrieval Layer]
-    L --> M[Pinecone Vector Store]
-    L --> N[Database Manager]
+    L --> M[Data Retrieval Layer]
+    M --> N[Pinecone Vector Store]
+    M --> O[Session Manager]
 
-    N --> O{Database Connected?}
-    O -->|Yes| P[PostgreSQL Query]
-    O -->|No| Q[Mock Data Fallback]
+    O --> P{Data Source Type?}
+    P -->|PostgreSQL| Q[User Database]
+    P -->|Shopify| R[Shopify Orders/Products]
+    P -->|None| S[Mock Data Fallback]
 
-    M --> R[Business Knowledge]
-    P --> S[Real User Data]
-    Q --> T[Sample Data]
+    G --> T[Shopify Service]
+    T --> U[External OAuth Connector]
+    U --> V[Shopify API]
 
-    R --> U[LLM Processing]
-    S --> U
-    T --> U
+    N --> W[Business Knowledge]
+    Q --> X[Real Database Data]
+    R --> Y[Real Shopify Data]
+    S --> Z[Sample Data]
 
-    U --> V[Response Generation]
-    V --> W[Formatted Output]
+    W --> AA[LLM Processing]
+    X --> AA
+    Y --> AA
+    Z --> AA
 
-    J --> X[Agent Response]
-    X --> Y[Session Storage]
-    Y --> Z[Chat Response]
+    AA --> AB[Response Generation]
+    AB --> AC[Formatted Output]
+
+    K --> AD[Agent Response]
+    AD --> AE[Session Storage Redis]
+    AE --> AF[Chat Response]
 ```
 
 ### Data Flow Architecture
@@ -54,33 +62,74 @@ graph LR
     subgraph "Data Sources"
         A[Pinecone Vector Store<br/>15 Business Docs]
         B[PostgreSQL Database<br/>User Connected]
-        C[Mock Data<br/>Fallback Sample]
+        C[Shopify Store<br/>OAuth Connected]
+        D[Mock Data<br/>Fallback Sample]
+    end
+
+    subgraph "Session Management"
+        E[Redis Session Manager<br/>Connection State]
+        F[DatabaseManager<br/>Query Routing]
     end
 
     subgraph "Processing Layer"
-        D[Query Classification]
-        E[DatabaseManager]
-        F[Vector Similarity Search]
-        G[LLM Processing]
+        G[Query Classification]
+        H[Vector Similarity Search]
+        I[Data Source Selector]
+        J[LLM Processing]
     end
 
     subgraph "Endpoints"
-        H[Chat - Conversational]
-        I[Retrieve Generate - Insights]
-        J[Retrieve Visualize - Charts]
+        K[Chat - Conversational]
+        L[Analytics - Metrics]
+        M[Shopify - Integration]
     end
 
-    A --> F
-    B --> E
-    C --> E
+    A --> H
+    B --> F
+    C --> F
+    D --> F
 
-    F --> G
-    E --> G
-    D --> G
-
-    G --> H
-    G --> I
+    E --> I
+    F --> I
+    H --> J
+    I --> J
     G --> J
+
+    J --> K
+    J --> L
+    M --> C
+```
+
+### Shopify OAuth Connection Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User/Frontend
+    participant B as Backend API
+    participant C as External Connector
+    participant S as Shopify OAuth
+    participant R as Redis Storage
+
+    U->>B: POST /shopify/connect {shop_name, session_id}
+    B->>C: POST /connect/shopify {store, redirect_url}
+    C->>B: Returns {auth_url}
+    B->>R: Store connection info
+    B->>U: Returns {auth_url}
+
+    U->>S: User clicks auth_url & authorizes
+    S->>C: OAuth callback with access_token
+    C->>U: Redirects to frontend callback
+
+    U->>B: GET /shopify/status/{session_id} (polling)
+    B->>C: Check if OAuth complete
+    C-->>B: Connection data
+    B->>R: Update connection with access_token
+    B->>S: Fetch orders using access_token
+    S->>B: Returns orders data
+    B->>R: Store orders in Redis
+    B->>U: Returns {connected: true, orders_count}
+
+    Note over U,R: User sees "Connected to Shopify" only after orders synced
 ```
 
 ## 🛡️ Endpoint Architecture
@@ -89,13 +138,20 @@ graph LR
 
 | Endpoint | Purpose | Session Tracking | Data Sources |
 |----------|---------|------------------|--------------|
-| `POST /chat` | **Conversational BI** with context memory | ✅ Required | Pinecone + Database/Mock |
+| `POST /chat` | **Conversational BI** with context memory | ✅ Required | Pinecone + Database/Shopify/Mock |
 | `POST /retrieve_and_generate` | **Standalone insights** - independent queries | ❌ Removed | Pinecone + Database/Mock |
 | `POST /retrieve_and_visualize` | **Standalone visualizations** - chart generation | ❌ Removed | Pinecone + Database/Mock |
 | `POST /database/test` | Test PostgreSQL connection | ❌ None | Direct DB Test |
 | `POST /database/connect` | Connect user database | ✅ Required | Connection Storage |
 | `GET /database/status/{id}` | Check connection status | ✅ Required | Connection Info |
-| `DELETE /database/disconnect/{id}` | Disconnect database | ✅ Required | Connection Cleanup |
+| `POST /database/disconnect/{id}` | Disconnect database | ✅ Required | Connection Cleanup |
+| `POST /shopify/connect` | **Initiate Shopify OAuth** | ✅ Required | External Connector API |
+| `GET /shopify/status/{id}` | **Check Shopify connection & auto-sync** | ✅ Required | Redis + Shopify API |
+| `POST /shopify/oauth-callback` | **Receive OAuth access_token** | ✅ Required | Token Storage + Sync |
+| `POST /shopify/disconnect/{id}` | **Disconnect Shopify store** | ✅ Required | Connection Cleanup |
+| `GET /analytics/sales` | Sales analytics data | ✅ Required | Active Data Source |
+| `GET /analytics/orders` | Orders analytics data | ✅ Required | Active Data Source |
+| `GET /analytics/inventory` | Inventory analytics data | ✅ Required | Active Data Source |
 
 ### Redundant Endpoints (Should be removed)
 
@@ -295,16 +351,33 @@ curl -X POST "http://localhost:8000/database/connect" \
 - **Automatic**: Always queried for relevant business knowledge
 
 ### 2. User PostgreSQL Database (Optional)
-- **Purpose**: User's actual business data
+- **Purpose**: User's actual business data from custom database
 - **Content**: Sales transactions, inventory, customer data
-- **Usage**: When user connects their database
-- **Connection**: Per-session via `/database/connect`
+- **Usage**: When user connects their database via `/database/connect`
+- **Connection**: Per-session, stored in Redis
+- **Authentication**: Direct connection string with credentials
 
-### 3. Mock Data (Fallback)
-- **Purpose**: Demo data when no database connected
+### 3. Shopify Store (Optional)
+- **Purpose**: User's Shopify ecommerce data
+- **Content**: Orders, products, customers from Shopify store
+- **Usage**: When user connects via OAuth flow (`/shopify/connect`)
+- **Connection**: Per-session, OAuth 2.0 with access token
+- **Auto-sync**: Orders automatically synced after OAuth completion
+- **Storage**: Connection data and orders stored in Redis with 24hr TTL
+
+### 4. Mock Data (Fallback)
+- **Purpose**: Demo data when no real data source connected
 - **Content**: Sample sales/inventory records (iPhone, Samsung, Nike)
 - **Usage**: Automatic fallback for demonstrations
 - **Limitation**: Limited to 3 sample records
+
+### Data Source Priority (Single Source at a Time)
+The system uses **ONE data source per session**:
+1. If PostgreSQL connected → Use database data
+2. Else if Shopify connected → Use Shopify data
+3. Else → Use mock data fallback
+
+**Note**: User cannot have both PostgreSQL and Shopify connected simultaneously. Connecting one disconnects the other.
 
 ## 🔄 System Benefits
 

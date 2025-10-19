@@ -143,24 +143,24 @@ graph TB
 ```mermaid
 graph TB
     subgraph Routes["API Endpoints"]
-        Chat[/chat<br/>Conversational BI]
-        Analytics[/analytics/*<br/>Sales/Orders/Inventory]
-        Forecast[/forecast<br/>Demand forecasting]
-        Shopify[/shopify/*<br/>Connect/Status/Disconnect]
-        Database[/database/*<br/>Connect/Test/Status]
+        Chat["Chat Endpoint<br/>Conversational BI"]
+        Analytics["Analytics Endpoints<br/>Sales/Orders/Inventory"]
+        Forecast["Forecast Endpoint<br/>Demand forecasting"]
+        Shopify["Shopify Endpoints<br/>Connect/Status/Disconnect"]
+        Database["Database Endpoints<br/>Connect/Test/Status"]
     end
 
     subgraph Core["Core Services"]
-        ConvMgr[Conversation Manager<br/>LangGraph orchestration]
-        BizAgent[Business Agent<br/>Unified query handler]
-        QueryClass[Query Classifier<br/>Intent detection]
-        GenBISQL[GenBISQL Engine<br/>RAG + LLM]
+        ConvMgr["Conversation Manager<br/>LangGraph orchestration"]
+        BizAgent["Business Agent<br/>Unified query handler"]
+        QueryClass["Query Classifier<br/>Intent detection"]
+        GenBISQL["GenBISQL Engine<br/>RAG + LLM"]
     end
 
     subgraph Managers["Resource Managers"]
-        DBMgr[Database Manager<br/>Connection pooling]
-        ShopifySvc[Shopify Service<br/>Connector API client]
-        RedisMgr[Redis Manager<br/>Session persistence]
+        DBMgr["Database Manager<br/>Connection pooling"]
+        ShopifySvc["Shopify Service<br/>Connector API client"]
+        RedisMgr["Redis Manager<br/>Session persistence"]
     end
 
     Chat --> ConvMgr

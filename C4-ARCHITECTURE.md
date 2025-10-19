@@ -1,294 +1,337 @@
-# PeppaSync - C4 Architecture Model
+# PeppaSync - System Architecture Documentation
 
-## Level 1: System Context Diagram
+> Complete C4 Model and UML diagrams for the PeppaSync Business Intelligence Platform
+
+---
+
+## Level 1: System Context
+
+**Overview**: How PeppaSync fits into the user's world
 
 ```mermaid
-C4Context
-    title System Context Diagram for PeppaSync - Business Intelligence Platform
+graph TB
+    User([Business Owner])
 
-    Person(user, "Business Owner", "E-commerce business owner needing analytics and forecasting")
+    PeppaSync[PeppaSync Platform<br/>AI-Powered BI System]
 
-    System(peppasync, "PeppaSync Platform", "AI-powered business intelligence platform for e-commerce analytics, forecasting, and insights")
+    Shopify[Shopify API]
+    PostgreSQL[(PostgreSQL<br/>Database)]
+    Connector[OAuth Connector<br/>connector.fundam.ng]
+    OpenAI[OpenAI GPT-4]
+    Pinecone[Pinecone<br/>Vector DB]
+    Redis[(Redis<br/>Cache)]
 
-    System_Ext(shopify, "Shopify", "E-commerce platform providing order, product, and customer data")
-    System_Ext(postgres, "PostgreSQL Database", "User's custom database with business data")
-    System_Ext(connector, "External Connector", "OAuth service for Shopify integration (connector.fundam.ng)")
-    System_Ext(openai, "OpenAI API", "GPT-4 for AI-powered analytics and insights")
-    System_Ext(pinecone, "Pinecone", "Vector database for business knowledge storage")
-    System_Ext(redis, "Redis", "Session and connection state management")
+    User -->|HTTPS| PeppaSync
 
-    Rel(user, peppasync, "Uses for analytics, forecasting, and AI insights", "HTTPS")
-    Rel(peppasync, shopify, "Fetches orders, products, customers", "REST API")
-    Rel(peppasync, postgres, "Queries business data", "PostgreSQL Protocol")
-    Rel(peppasync, connector, "Manages Shopify OAuth flow", "REST API")
-    Rel(peppasync, openai, "Generates insights and forecasts", "REST API")
-    Rel(peppasync, pinecone, "Retrieves business knowledge", "REST API")
-    Rel(peppasync, redis, "Stores session state", "Redis Protocol")
+    PeppaSync -->|Fetch data| Shopify
+    PeppaSync -->|Query| PostgreSQL
+    PeppaSync -->|OAuth| Connector
+    PeppaSync -->|AI requests| OpenAI
+    PeppaSync -->|Knowledge| Pinecone
+    PeppaSync -->|Sessions| Redis
 
-    UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
+    style User fill:#08427b,stroke:#052e56,color:#fff
+    style PeppaSync fill:#1168bd,stroke:#0b4884,color:#fff
+    style Shopify fill:#999,stroke:#666,color:#fff
+    style PostgreSQL fill:#999,stroke:#666,color:#fff
+    style Connector fill:#999,stroke:#666,color:#fff
+    style OpenAI fill:#999,stroke:#666,color:#fff
+    style Pinecone fill:#999,stroke:#666,color:#fff
+    style Redis fill:#999,stroke:#666,color:#fff
 ```
 
 ---
 
 ## Level 2: Container Diagram
 
+**Overview**: Major components and their responsibilities
+
 ```mermaid
-C4Container
-    title Container Diagram for PeppaSync Platform
+graph TB
+    User([Business Owner])
 
-    Person(user, "Business Owner", "Uses web interface for analytics")
+    subgraph Platform["PeppaSync Platform"]
+        Frontend[Next.js Web App<br/>React + TypeScript]
+        Backend[FastAPI Backend<br/>Python]
+        AISystem[LangChain/LangGraph<br/>AI Agent System]
+        SessionStore[(Redis<br/>Sessions)]
+    end
 
-    Container_Boundary(peppasync, "PeppaSync Platform") {
-        Container(webapp, "Web Application", "Next.js 14, React, TypeScript", "Provides UI for analytics, forecasting, and AI chat")
-        Container(api, "Backend API", "FastAPI, Python", "Provides REST API for analytics, forecasting, and data processing")
-        Container(langchain, "AI Agent System", "LangChain, LangGraph", "Orchestrates AI workflows and business intelligence")
-        ContainerDb(redis, "Session Store", "Redis", "Stores user sessions and connection state")
-    }
+    Shopify[Shopify API]
+    UserDB[(PostgreSQL)]
+    OpenAI[OpenAI]
+    Pinecone[Pinecone]
 
-    System_Ext(shopify, "Shopify API", "E-commerce data source")
-    System_Ext(postgres, "User Database", "Custom business data")
-    System_Ext(connector, "OAuth Connector", "Shopify OAuth service")
-    System_Ext(openai, "OpenAI API", "LLM for insights")
-    System_Ext(pinecone, "Pinecone", "Vector knowledge base")
+    User -->|HTTPS| Frontend
+    Frontend -->|JSON/REST| Backend
+    Backend --> AISystem
+    Backend --> SessionStore
+    Backend -->|Data| Shopify
+    Backend -->|Query| UserDB
+    AISystem -->|LLM| OpenAI
+    AISystem -->|RAG| Pinecone
 
-    Rel(user, webapp, "Uses", "HTTPS")
-    Rel(webapp, api, "Makes API calls", "JSON/HTTPS")
-    Rel(api, langchain, "Delegates AI tasks", "Function calls")
-    Rel(api, redis, "Reads/writes sessions", "Redis Protocol")
-    Rel(api, shopify, "Fetches data via connector", "REST API")
-    Rel(api, postgres, "Queries data", "SQL")
-    Rel(api, connector, "OAuth flow", "REST API")
-    Rel(langchain, openai, "Generates insights", "REST API")
-    Rel(langchain, pinecone, "Retrieves knowledge", "REST API")
-
-    UpdateLayoutConfig($c4ShapeInRow="2", $c4BoundaryInRow="1")
+    style User fill:#08427b,color:#fff
+    style Frontend fill:#1168bd,color:#fff
+    style Backend fill:#1168bd,color:#fff
+    style AISystem fill:#1168bd,color:#fff
+    style SessionStore fill:#1168bd,color:#fff
 ```
 
 ---
 
-## Level 3: Component Diagram - Frontend (Next.js App)
+## Level 3: Frontend Components
+
+**Overview**: Next.js application structure
 
 ```mermaid
-C4Component
-    title Component Diagram - Frontend Web Application
+graph TB
+    subgraph Pages["Pages"]
+        Home[Home Page<br/>Dashboard]
+        Callback[Shopify Callback<br/>OAuth Handler]
+    end
 
-    Container_Boundary(webapp, "Next.js Web Application") {
-        Component(home, "Home Page", "React Component", "Main dashboard with connection management")
-        Component(assistant, "AI Assistant", "React Component", "Conversational AI for business insights")
-        Component(analytics, "Analytics Dashboard", "React Components", "Sales, orders, inventory visualizations")
-        Component(forecast, "Forecast Settings", "React Component", "Configure economic events and supply chain")
-        Component(shopifyconn, "Shopify Connection", "React Component", "OAuth flow and connection management")
-        Component(dbconn, "Database Connection", "React Component", "PostgreSQL connection setup")
+    subgraph Components["React Components"]
+        AIChat[AI Assistant]
+        Analytics[Analytics Dashboard]
+        DBConn[Database Connection]
+        ShopifyConn[Shopify Connection]
+        Forecast[Forecast Settings]
+    end
 
-        Component(sessionctx, "Session Context", "React Context", "Manages user session and data source state")
-        Component(analyticsctx, "Analytics Context", "React Context", "Manages analytics data fetching and caching")
-        Component(apiservice, "API Service", "TypeScript Class", "Singleton API client for backend calls")
-    }
+    subgraph State["State Management"]
+        SessionCtx[Session Context<br/>sessionId + dataSource]
+        AnalyticsCtx[Analytics Context<br/>Data caching]
+    end
 
-    Container(api, "Backend API", "FastAPI", "REST endpoints")
+    subgraph Services["Services"]
+        API[API Service<br/>Singleton client]
+    end
 
-    Rel(home, sessionctx, "Uses", "Context API")
-    Rel(home, dbconn, "Renders", "React")
-    Rel(home, shopifyconn, "Renders", "React")
-    Rel(home, analytics, "Renders", "React")
-    Rel(home, assistant, "Renders", "React")
+    LocalStorage[(Browser<br/>localStorage)]
 
-    Rel(assistant, forecast, "Opens modal", "React")
-    Rel(assistant, sessionctx, "Reads session", "Context API")
-    Rel(assistant, apiservice, "Sends prompts", "HTTP")
+    Home --> AIChat
+    Home --> Analytics
+    Home --> DBConn
+    Home --> ShopifyConn
 
-    Rel(shopifyconn, apiservice, "Connect/disconnect", "HTTP")
-    Rel(dbconn, apiservice, "Test/connect", "HTTP")
+    AIChat --> Forecast
+    AIChat --> SessionCtx
+    AIChat --> API
 
-    Rel(analyticsctx, apiservice, "Fetches data", "HTTP")
-    Rel(analyticsctx, sessionctx, "Reads session", "Context API")
+    Analytics --> AnalyticsCtx
+    AnalyticsCtx --> SessionCtx
+    AnalyticsCtx --> API
 
-    Rel(apiservice, api, "All API calls", "JSON/HTTPS")
-    Rel(sessionctx, api, "Session validation", "JSON/HTTPS")
+    SessionCtx <--> LocalStorage
+    API -->|HTTP| Backend[Backend API]
 
-    UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
+    style Home fill:#4a90e2,color:#fff
+    style AIChat fill:#4a90e2,color:#fff
+    style Analytics fill:#4a90e2,color:#fff
+    style SessionCtx fill:#50c878,color:#fff
+    style AnalyticsCtx fill:#50c878,color:#fff
+    style API fill:#f5a623,color:#fff
 ```
 
 ---
 
-## Level 3: Component Diagram - Backend API
+## Level 3: Backend Components
+
+**Overview**: FastAPI application structure
 
 ```mermaid
-C4Component
-    title Component Diagram - Backend API (FastAPI)
+graph TB
+    subgraph Routes["API Endpoints"]
+        Chat[/chat<br/>Conversational BI]
+        Analytics[/analytics/*<br/>Sales/Orders/Inventory]
+        Forecast[/forecast<br/>Demand forecasting]
+        Shopify[/shopify/*<br/>Connect/Status/Disconnect]
+        Database[/database/*<br/>Connect/Test/Status]
+    end
 
-    Container_Boundary(api, "FastAPI Backend") {
-        Component(chatep, "Chat Endpoint", "FastAPI Route", "Conversational BI with LangGraph")
-        Component(analyticsep, "Analytics Endpoints", "FastAPI Routes", "Sales, orders, inventory data")
-        Component(forecastep, "Forecast Endpoint", "FastAPI Route", "Demand forecasting with Prophet/ARIMA")
-        Component(shopifyep, "Shopify Endpoints", "FastAPI Routes", "Connect, status, disconnect, callback")
-        Component(dbep, "Database Endpoints", "FastAPI Routes", "Test, connect, disconnect, status")
+    subgraph Core["Core Services"]
+        ConvMgr[Conversation Manager<br/>LangGraph orchestration]
+        BizAgent[Business Agent<br/>Unified query handler]
+        QueryClass[Query Classifier<br/>Intent detection]
+        GenBISQL[GenBISQL Engine<br/>RAG + LLM]
+    end
 
-        Component(convmgr, "Conversation Manager", "Python Class", "LangGraph workflow orchestration")
-        Component(bizagent, "Business Agent", "LangGraph Agent", "Unified agent for all business queries")
-        Component(queryclassifier, "Query Classifier", "Python Class", "Classifies query intent and data needs")
-        Component(genbisql, "GenBISQL Engine", "Python Class", "Vector search and LLM processing")
+    subgraph Managers["Resource Managers"]
+        DBMgr[Database Manager<br/>Connection pooling]
+        ShopifySvc[Shopify Service<br/>Connector API client]
+        RedisMgr[Redis Manager<br/>Session persistence]
+    end
 
-        Component(dbmgr, "Database Manager", "Python Class", "Manages DB connections and queries")
-        Component(shopifysvc, "Shopify Service", "Python Class", "External connector API integration")
-        Component(redismgr, "Redis Manager", "Python Class", "Session persistence")
-    }
+    Chat --> ConvMgr
+    ConvMgr --> BizAgent
+    BizAgent --> QueryClass
+    BizAgent --> GenBISQL
 
-    ContainerDb(redis, "Redis", "Session store")
-    System_Ext(postgres, "User DB", "Custom database")
-    System_Ext(connector, "OAuth Connector", "Shopify service")
-    System_Ext(openai, "OpenAI", "LLM API")
-    System_Ext(pinecone, "Pinecone", "Vector DB")
+    Analytics --> DBMgr
+    Forecast --> DBMgr
+    Shopify --> ShopifySvc
+    Database --> DBMgr
 
-    Rel(chatep, convmgr, "Delegates to", "Function call")
-    Rel(convmgr, bizagent, "Orchestrates", "LangGraph")
-    Rel(bizagent, queryclassifier, "Classifies query", "Function call")
-    Rel(bizagent, genbisql, "Retrieves data", "Function call")
-    Rel(bizagent, openai, "Generates response", "REST API")
+    ShopifySvc --> DBMgr
+    GenBISQL --> DBMgr
 
-    Rel(analyticsep, dbmgr, "Fetches analytics", "Function call")
-    Rel(forecastep, dbmgr, "Gets historical data", "Function call")
-    Rel(forecastep, openai, "Forecast analysis", "REST API")
+    DBMgr --> RedisMgr
+    ShopifySvc --> RedisMgr
 
-    Rel(shopifyep, shopifysvc, "Manages Shopify", "Function call")
-    Rel(shopifysvc, connector, "OAuth & data fetch", "REST API")
-    Rel(shopifysvc, dbmgr, "Stores orders", "Function call")
-
-    Rel(dbep, dbmgr, "Connection mgmt", "Function call")
-    Rel(dbmgr, postgres, "Queries data", "SQL")
-    Rel(dbmgr, redis, "Stores connections", "Redis Protocol")
-
-    Rel(genbisql, pinecone, "Vector search", "REST API")
-    Rel(genbisql, dbmgr, "Gets data", "Function call")
-
-    Rel(redismgr, redis, "Session ops", "Redis Protocol")
-
-    UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
+    style Chat fill:#4a90e2,color:#fff
+    style Analytics fill:#4a90e2,color:#fff
+    style ConvMgr fill:#50c878,color:#fff
+    style BizAgent fill:#50c878,color:#fff
+    style DBMgr fill:#f5a623,color:#fff
+    style ShopifySvc fill:#f5a623,color:#fff
 ```
 
 ---
 
-## Level 4: Code Diagram - Shopify Integration Flow
+## Shopify OAuth Integration Flow
+
+**Detailed sequence of Shopify connection process**
 
 ```mermaid
 sequenceDiagram
-    participant U as User
-    participant FE as Frontend (ShopifyConnection)
-    participant API as Backend API
-    participant SS as ShopifyService
-    participant Conn as External Connector
-    participant Shop as Shopify OAuth
-    participant Redis as Redis Store
-    participant Callback as Callback Page
+    actor User
+    participant FE as Frontend
+    participant API as Backend
+    participant SS as Shopify Service
+    participant Conn as OAuth Connector
+    participant Shop as Shopify
+    participant Redis
+    participant CB as Callback Page
 
-    U->>FE: Click "Connect Shopify"
+    User->>FE: Click Connect
     FE->>FE: Generate session_id
-    FE->>FE: Save session_id to localStorage
+    Note over FE: Save to localStorage
 
-    FE->>API: POST /shopify/connect<br/>{shop_name, session_id}
+    FE->>API: POST /shopify/connect
     API->>SS: connect_shopify_store()
-    SS->>Conn: POST /connect/shopify<br/>{store, redirect_url}
+    SS->>Conn: POST /connect/shopify
     Conn-->>SS: {auth_url}
-    SS-->>API: {success, auth_url}
-    API->>Redis: Store connection info
-    API-->>FE: {success, auth_url}
+    API->>Redis: Store connection
+    API-->>FE: {auth_url}
 
-    FE->>FE: Save auth_url to localStorage
-    FE->>FE: Display auth URL to user
+    FE->>FE: Display auth link
+    User->>Shop: Authorize app
+    Shop->>Conn: OAuth callback
+    Conn-->>CB: Redirect with success
 
-    U->>Shop: User clicks auth_url & authorizes
-    Shop->>Conn: OAuth callback with code
-    Conn->>Conn: Exchange code for access_token
-    Conn->>Callback: Redirect with success param
-
-    Callback->>Callback: Get session_id from localStorage
-    Callback->>Callback: Set data_source='shopify' in localStorage
-
-    loop Poll every 1 second (max 30)
-        Callback->>API: GET /shopify/status/{session_id}
-        API->>Redis: Get connection info
-        API->>SS: get_connection_id_by_shop()
+    loop Poll for orders
+        CB->>API: GET /shopify/status
+        API->>SS: get_connection_id()
         SS->>Conn: GET /connections
-        Conn-->>SS: {connections: [{id, slug, ...}]}
-        SS->>SS: Find connection_id by shop name
-        SS-->>API: connection_id
+        Conn-->>SS: [{id, slug}]
 
-        API->>SS: auto_sync_orders(shop_name, bearer_token)
-        SS->>Conn: GET /shopify/fetch/orders/{connection_id}
-        Conn-->>SS: {orders: [...]}
+        API->>SS: auto_sync_orders()
+        SS->>Conn: GET /fetch/orders/{id}
+        Conn-->>SS: [orders]
         SS->>Redis: Store orders
-        SS-->>API: orders_count
-
-        API->>Redis: Update last_sync timestamp
-        API-->>Callback: {connected: true, orders_count}
-
-        alt orders_count > 0
-            Callback->>Callback: Stop polling, show success
-            Callback->>Callback: window.location.href = '/'
-        end
+        API-->>CB: {connected, orders_count}
     end
 
-    Note over Callback,Redis: Frontend reloads, SessionContext<br/>reads from localStorage
+    CB->>CB: Success! Redirect home
 ```
 
 ---
 
-## Data Flow Diagram - Single Data Source Architecture
+## Data Source Architecture
+
+**Single data source per session**
 
 ```mermaid
 flowchart TD
-    User[User/Business Owner]
+    User[User Session]
 
-    subgraph Frontend[Next.js Frontend]
-        SessionCtx[Session Context<br/>sessionId + dataSource]
-        AnalyticsCtx[Analytics Context]
-        APIService[API Service Singleton]
+    subgraph Frontend
+        Session[Session Context<br/>sessionId + dataSource]
+        LS[localStorage]
     end
 
-    subgraph Backend[FastAPI Backend]
-        Endpoints[API Endpoints]
+    subgraph Backend
+        Router[API Router]
         DBMgr[Database Manager]
-        ShopifySvc[Shopify Service]
     end
 
-    subgraph DataSources[Data Sources - ONE AT A TIME]
-        PG[(PostgreSQL<br/>User Database)]
-        Shopify[(Shopify Store<br/>via Connector)]
-        Mock[Mock Data<br/>Fallback]
+    subgraph "Data Sources (ONE at a time)"
+        PG[(PostgreSQL<br/>dataSource='postgres')]
+        Shopify[(Shopify<br/>dataSource='shopify')]
+        Mock[Mock Data<br/>dataSource=null]
     end
 
-    subgraph Storage[State Management]
-        Redis[(Redis<br/>Sessions & Connections)]
-        LocalStorage[Browser localStorage<br/>session_id, data_source]
-    end
+    Redis[(Redis<br/>State Store)]
 
-    subgraph AI[AI Layer]
-        Pinecone[(Pinecone<br/>Business Knowledge)]
-        OpenAI[OpenAI GPT-4<br/>Insights Generation]
-    end
+    User --> Session
+    Session <--> LS
+    Session -->|Determines source| Router
+    Router --> DBMgr
 
-    User -->|Interacts| Frontend
-    SessionCtx -->|Tracks| LocalStorage
-    SessionCtx -->|Determines| DataSources
-    AnalyticsCtx -->|Fetches via| APIService
-    APIService -->|HTTP Calls| Endpoints
+    DBMgr -->|if postgres| PG
+    DBMgr -->|if shopify| Shopify
+    DBMgr -->|if null| Mock
 
-    Endpoints -->|Routes to| DBMgr
-    Endpoints -->|Routes to| ShopifySvc
+    DBMgr <--> Redis
 
-    DBMgr -->|If dataSource=postgres| PG
-    DBMgr -->|If dataSource=shopify| Shopify
-    DBMgr -->|If dataSource=null| Mock
-    DBMgr -->|Stores state| Redis
+    style Session fill:#50c878,color:#fff
+    style DBMgr fill:#f5a623,color:#fff
+    style PG fill:#e74c3c,color:#fff
+    style Shopify fill:#3498db,color:#fff
+    style Mock fill:#95a5a6,color:#fff
+```
 
-    ShopifySvc -->|OAuth & Fetch| Shopify
-    ShopifySvc -->|Store orders| Redis
+---
 
-    Endpoints -->|Context retrieval| Pinecone
-    Endpoints -->|Generate insights| OpenAI
+## AI Agent Workflow
 
-    style DataSources fill:#f9f,stroke:#333,stroke-width:4px
-    style SessionCtx fill:#bbf,stroke:#333,stroke-width:2px
+**LangGraph conversation flow**
+
+```mermaid
+graph TB
+    UserQuery[User Query]
+
+    ConvMgr[Conversation Manager<br/>Session + History]
+
+    QueryClass{Query Classifier<br/>What type?}
+
+    DataQuery[Data-Specific Query<br/>needs DB/Shopify]
+    GeneralAdv[General Business Advice<br/>knowledge only]
+
+    DBCheck{Data Source<br/>Connected?}
+
+    GetData[Fetch from DB/Shopify<br/>via DatabaseManager]
+    UseMock[Use Mock Data<br/>+ suggest connection]
+
+    VectorSearch[Pinecone RAG<br/>Business knowledge]
+
+    LLM[OpenAI GPT-4<br/>Generate response]
+
+    Response[AI Response<br/>with citations]
+
+    UserQuery --> ConvMgr
+    ConvMgr --> QueryClass
+
+    QueryClass -->|Needs data| DataQuery
+    QueryClass -->|General| GeneralAdv
+
+    DataQuery --> DBCheck
+    DBCheck -->|Yes| GetData
+    DBCheck -->|No| UseMock
+
+    GetData --> VectorSearch
+    UseMock --> VectorSearch
+    GeneralAdv --> VectorSearch
+
+    VectorSearch --> LLM
+    LLM --> Response
+
+    style QueryClass fill:#f39c12,color:#fff
+    style DBCheck fill:#f39c12,color:#fff
+    style VectorSearch fill:#9b59b6,color:#fff
+    style LLM fill:#9b59b6,color:#fff
+    style Response fill:#27ae60,color:#fff
 ```
 
 ---
@@ -298,121 +341,310 @@ flowchart TD
 ```mermaid
 graph TB
     subgraph Internet
-        User[Users/Browsers]
+        Users([Users])
     end
 
-    subgraph Vercel[Vercel - Frontend Hosting]
-        NextJS[Next.js App<br/>Static + SSR]
-        EdgeFunc[Edge Functions]
+    subgraph "Vercel (Frontend)"
+        NextJS[Next.js App<br/>SSR + Static]
+        Edge[Edge Functions]
     end
 
-    subgraph Backend[Backend Infrastructure]
-        API[FastAPI Server<br/>Port 8000]
-        Worker[Background Workers<br/>Forecasting/Sync]
+    subgraph "Cloud VM (Backend)"
+        FastAPI[FastAPI Server<br/>:8000]
+        Workers[Background Workers<br/>Forecasting]
     end
 
-    subgraph Databases
-        Redis[(Redis Cloud<br/>Sessions)]
-        UserDB[(User's PostgreSQL<br/>Customer Provided)]
+    subgraph "Managed Services"
+        RedisCloud[(Redis Cloud<br/>Sessions)]
+        PineconeCloud[Pinecone Cloud<br/>Vectors]
+        OpenAIAPI[OpenAI API<br/>GPT-4]
     end
 
-    subgraph External[External Services]
-        Shopify[Shopify Stores]
+    subgraph "External"
+        ShopifyStores[Shopify Stores]
         Connector[OAuth Connector<br/>connector.fundam.ng]
-        OpenAI[OpenAI API]
-        Pinecone[Pinecone Vector DB]
+        UserDB[(Customer DB)]
     end
 
-    User -->|HTTPS| NextJS
-    NextJS -->|API Calls| API
-    API -->|Session Mgmt| Redis
-    API -->|Query Data| UserDB
-    API -->|OAuth Flow| Connector
-    Connector -->|Fetch Data| Shopify
-    API -->|AI Requests| OpenAI
-    API -->|Vector Search| Pinecone
-    Worker -->|Async Tasks| API
+    Users -->|HTTPS| NextJS
+    NextJS -->|API| FastAPI
+    FastAPI --> RedisCloud
+    FastAPI --> PineconeCloud
+    FastAPI --> OpenAIAPI
+    FastAPI --> Connector
+    Connector --> ShopifyStores
+    FastAPI --> UserDB
+    Workers --> FastAPI
 
-    style Vercel fill:#e1f5ff
-    style Backend fill:#ffe1e1
-    style Databases fill:#e1ffe1
-    style External fill:#fff4e1
+    style NextJS fill:#1168bd,color:#fff
+    style FastAPI fill:#1168bd,color:#fff
+    style RedisCloud fill:#dc382d,color:#fff
+    style PineconeCloud fill:#000,color:#fff
+    style OpenAIAPI fill:#10a37f,color:#fff
 ```
 
 ---
 
 ## Technology Stack
 
-### Frontend
-- **Framework**: Next.js 14 (App Router)
-- **Language**: TypeScript
-- **UI Library**: React 18
-- **Styling**: Tailwind CSS
-- **State Management**: React Context API
-- **Charts**: Recharts
-- **Icons**: Lucide React
+### Frontend Stack
+```
+┌─────────────────────────────────┐
+│   Next.js 14 (App Router)       │
+│   React 18 + TypeScript          │
+│   Tailwind CSS                   │
+│   Context API (State)            │
+│   Recharts (Visualization)       │
+│   Lucide Icons                   │
+└─────────────────────────────────┘
+```
 
-### Backend
-- **Framework**: FastAPI
-- **Language**: Python 3.9+
-- **AI/ML**: LangChain, LangGraph
-- **Forecasting**: Prophet, ARIMA (statsmodels)
-- **LLM**: OpenAI GPT-4o-mini
-- **Vector DB**: Pinecone
-- **Session Store**: Redis
-
-### Data Sources
-- **PostgreSQL**: User's custom database
-- **Shopify**: Via external OAuth connector
-- **Mock Data**: Fallback for demos
-
-### Infrastructure
-- **Frontend Hosting**: Vercel
-- **Backend Hosting**: Cloud VM / Docker
-- **Session Storage**: Redis Cloud
-- **Vector Storage**: Pinecone Cloud
+### Backend Stack
+```
+┌─────────────────────────────────┐
+│   FastAPI (Python 3.9+)          │
+│   LangChain + LangGraph          │
+│   Prophet + ARIMA (Forecasting)  │
+│   OpenAI GPT-4o-mini             │
+│   Pinecone (Vector DB)           │
+│   Redis (Sessions)               │
+│   PostgreSQL (User data)         │
+└─────────────────────────────────┘
+```
 
 ---
 
-## Key Design Patterns
+## Key Architectural Decisions
 
-1. **Single Data Source Architecture**: Only ONE data source active per session (PostgreSQL OR Shopify OR Mock)
+### 1. Single Data Source Architecture
+**Decision**: Only ONE data source active per session (PostgreSQL OR Shopify OR Mock)
 
-2. **Session-Based Isolation**: Each user has isolated session with dedicated data source connection
+**Rationale**:
+- Prevents data confusion and mixing
+- Clear source of truth for analytics
+- Simpler state management
+- Easier to debug and maintain
 
-3. **Frontend-Tracked State**: Connection state tracked in localStorage + React Context, not backend polling
+### 2. Frontend-Tracked Connection State
+**Decision**: Store connection state in localStorage + React Context, not backend polling
 
-4. **OAuth Delegation**: Shopify OAuth handled by external connector service, not direct integration
+**Rationale**:
+- Reduces backend load
+- Faster UI responsiveness
+- Works offline/during backend restart
+- Survives page refreshes
 
-5. **AI Agent Pattern**: LangGraph orchestrates unified business agent for all query types
+### 3. External OAuth Connector
+**Decision**: Use external connector service instead of direct Shopify OAuth
 
-6. **Vector-Augmented Generation**: Business knowledge from Pinecone combined with user data
+**Rationale**:
+- Outsources OAuth complexity
+- No need to manage Shopify app credentials
+- Connector handles token refresh
+- Reduces security surface area
 
-7. **Automatic Fallback**: Mock data used when no data source connected
+### 4. Unified AI Agent Pattern
+**Decision**: Single LangGraph agent handles all query types
 
-8. **Redis-First Session**: All sessions and connections persisted in Redis with 24hr TTL
+**Rationale**:
+- Eliminates endpoint proliferation
+- Natural language interface
+- Context-aware responses
+- Easier to extend with new capabilities
+
+### 5. Redis-First Session Management
+**Decision**: All sessions and connections in Redis with 24hr TTL
+
+**Rationale**:
+- Fast session lookup
+- Automatic cleanup via TTL
+- Horizontal scalability
+- No database overhead for temporary state
 
 ---
 
-## Security Considerations
+## Security Architecture
 
-1. **No Credential Storage**: Database credentials never stored, only connection strings in Redis
-2. **Session Isolation**: Each session completely isolated, no cross-contamination
-3. **OAuth Best Practices**: External connector handles token exchange, not direct app
-4. **API Key Protection**: OpenAI and Pinecone keys server-side only
-5. **HTTPS Only**: All external communication encrypted
-6. **Input Validation**: All user inputs validated before DB queries
-7. **SQL Injection Protection**: Parameterized queries only, no string concatenation
+```mermaid
+graph TB
+    subgraph "Security Layers"
+        HTTPS[HTTPS/TLS<br/>All external comms]
+        Session[Session Isolation<br/>Per-user namespacing]
+        NoStore[No Credential Storage<br/>Connection strings only]
+        OAuth[OAuth 2.0<br/>Delegated auth]
+        Validation[Input Validation<br/>SQL injection prevention]
+        Keys[API Key Protection<br/>Server-side only]
+    end
+
+    Request[Incoming Request]
+
+    Request --> HTTPS
+    HTTPS --> Session
+    Session --> OAuth
+    Session --> NoStore
+    Session --> Validation
+    Validation --> Keys
+    Keys --> Response[Secure Response]
+
+    style HTTPS fill:#e74c3c,color:#fff
+    style Session fill:#e67e22,color:#fff
+    style OAuth fill:#f39c12,color:#fff
+    style Keys fill:#16a085,color:#fff
+```
 
 ---
 
-## Scalability Considerations
+## Scalability Patterns
 
-1. **Stateless Backend**: API servers can scale horizontally
-2. **Redis Clustering**: Session store can be clustered for high availability
-3. **Pinecone Sharding**: Vector DB scales with data volume
-4. **Async Processing**: Background workers for heavy forecasting tasks
-5. **CDN Distribution**: Frontend static assets served via Vercel CDN
-6. **Connection Pooling**: Database connections pooled and reused
-7. **Rate Limiting**: OpenAI API calls throttled to prevent quota exhaustion
+### Horizontal Scaling
+- ✅ Stateless FastAPI servers
+- ✅ Redis clustering for sessions
+- ✅ Pinecone auto-scaling
+- ✅ Vercel CDN for frontend
 
+### Performance Optimization
+- ✅ Connection pooling (PostgreSQL)
+- ✅ Response caching (Analytics)
+- ✅ Background workers (Forecasting)
+- ✅ Lazy loading (Frontend)
+
+### Resource Management
+- ✅ Rate limiting (OpenAI)
+- ✅ Query timeout (30s max)
+- ✅ Session TTL (24hr auto-cleanup)
+- ✅ Vector index optimization
+
+---
+
+## Data Flow Example: "What were my sales last month?"
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant UI as Frontend
+    participant API as Backend
+    participant Agent as AI Agent
+    participant DB as Data Source
+    participant Vec as Pinecone
+    participant LLM as OpenAI
+
+    User->>UI: "What were my sales last month?"
+    UI->>API: POST /chat {prompt, session_id}
+    API->>Agent: Process query
+    Agent->>Agent: Classify: Data-specific query
+    Agent->>DB: Get sales data (last 30 days)
+    DB-->>Agent: [sales records]
+    Agent->>Vec: Find relevant context
+    Vec-->>Agent: [best practices, insights]
+    Agent->>LLM: Generate response
+    Note over Agent,LLM: Combines data + knowledge
+    LLM-->>Agent: Natural language answer
+    Agent-->>API: Response + metadata
+    API-->>UI: {content, citations, data}
+    UI->>User: Display formatted response
+```
+
+---
+
+## Error Handling Strategy
+
+```mermaid
+graph TB
+    Request[API Request]
+
+    Validate{Input Valid?}
+
+    SessionCheck{Session Valid?}
+
+    DataSource{Source Available?}
+
+    Execute[Execute Query]
+
+    Success[Return Success]
+
+    ValidationError[400 Bad Request]
+    SessionError[401 Unauthorized]
+    SourceError[Use Mock Data<br/>Suggest Connection]
+    QueryError[500 Internal Error<br/>Log & Alert]
+
+    Request --> Validate
+    Validate -->|No| ValidationError
+    Validate -->|Yes| SessionCheck
+    SessionCheck -->|No| SessionError
+    SessionCheck -->|Yes| DataSource
+    DataSource -->|Connected| Execute
+    DataSource -->|Not Connected| SourceError
+    Execute -->|Success| Success
+    Execute -->|Failure| QueryError
+
+    style Success fill:#27ae60,color:#fff
+    style ValidationError fill:#e74c3c,color:#fff
+    style SessionError fill:#e74c3c,color:#fff
+    style SourceError fill:#f39c12,color:#fff
+    style QueryError fill:#c0392b,color:#fff
+```
+
+---
+
+## File Structure
+
+```
+peppasync-main/
+├── peppasync-ai/                    # Frontend (Next.js)
+│   ├── app/
+│   │   ├── components/              # React components
+│   │   │   ├── AIAssistant.tsx      # Conversational AI
+│   │   │   ├── ShopifyConnection.tsx # Shopify OAuth
+│   │   │   ├── DatabaseConnection.tsx
+│   │   │   └── ForecastSettingsModal.tsx
+│   │   ├── contexts/                # State management
+│   │   │   ├── SessionContext.tsx   # Session + dataSource
+│   │   │   └── AnalyticsContext.tsx # Data caching
+│   │   ├── lib/
+│   │   │   └── api.ts               # API client singleton
+│   │   ├── shopify/callback/
+│   │   │   └── page.tsx             # OAuth callback
+│   │   └── page.tsx                 # Home dashboard
+│   └── package.json
+│
+├── peppasync-langchain/             # Backend (FastAPI)
+│   ├── app.py                       # Main FastAPI app
+│   ├── lib/
+│   │   ├── config.py                # Database manager
+│   │   ├── shopify_service.py       # Shopify integration
+│   │   ├── conversation_manager.py  # LangGraph orchestration
+│   │   ├── query_classifier.py      # Query intent detection
+│   │   ├── peppagenbi.py            # GenBISQL + RAG
+│   │   └── redis_session.py         # Redis manager
+│   └── requirements.txt
+│
+└── C4-ARCHITECTURE.md               # This file
+```
+
+---
+
+## Next Steps & Roadmap
+
+### Phase 1: Stability (Current)
+- ✅ Single data source architecture
+- ✅ Shopify OAuth integration
+- ✅ Demand forecasting
+- ✅ AI conversational interface
+
+### Phase 2: Enhancement
+- 🔄 Multi-warehouse support
+- 🔄 Real-time data sync
+- 🔄 Custom alert system
+- 🔄 Export to Excel/PDF
+
+### Phase 3: Scale
+- ⏳ Multi-tenant architecture
+- ⏳ Team collaboration
+- ⏳ API for third-party integrations
+- ⏳ Advanced ML models
+
+---
+
+**Documentation Version**: 1.0
+**Last Updated**: 2025-01-19
+**System**: PeppaSync Business Intelligence Platform

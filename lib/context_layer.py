@@ -39,7 +39,7 @@ class ContextLayer:
         self.forecasting_engine = ForecastingEngine()
         self.validation_engine = ValidationEngine()
 
-    def prepare_forecast_context(
+    async def prepare_forecast_context(
         self,
         session_id: str,
         user_prompt: str,
@@ -90,7 +90,7 @@ class ContextLayer:
             supply_chain_locations = settings.get("supply_chain_locations", [])
 
             # Step 3: Fetch historical data
-            historical_data = self._fetch_historical_data(
+            historical_data = await self._fetch_historical_data(
                 session_id,
                 product_filter=None,  # Don't filter yet, get all data first
                 lookback_days=forecast_params.get("lookback_days", 90)
@@ -270,7 +270,7 @@ class ContextLayer:
         logger.debug(f"Extracted parameters from '{user_prompt}': {params}")
         return params
 
-    def _fetch_historical_data(
+    async def _fetch_historical_data(
         self,
         session_id: str,
         product_filter: Optional[str],
@@ -305,7 +305,7 @@ class ContextLayer:
             # Try PostgreSQL first
             if DatabaseManager.has_user_connection(session_id):
                 logger.info("Fetching data from PostgreSQL...")
-                sales_data = DatabaseManager.get_data(
+                sales_data = await DatabaseManager.get_data(
                     session_id=session_id,
                     query_type="sales_data",
                     use_mock=False,

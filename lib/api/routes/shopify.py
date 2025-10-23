@@ -86,7 +86,7 @@ async def connect_shopify(request: ShopifyConnectRequest):
             connection_data=result
         )
 
-        logger.info(f"✅ Shopify connection initiated for {request.shop_name}")
+        logger.info(f"Shopify connection initiated for {request.shop_name}")
 
         # Step 3: Auto-sync orders if access token is available
         access_token = result.get("data", {}).get("access_token")
@@ -102,7 +102,7 @@ async def connect_shopify(request: ShopifyConnectRequest):
                 )
                 DatabaseManager.store_shopify_orders(request.session_id, orders)
                 orders_synced = len(orders)
-                logger.info(f"✅ Synced {orders_synced} orders for {request.shop_name}")
+                logger.info(f"Synced {orders_synced} orders for {request.shop_name}")
             except Exception as sync_err:
                 logger.error(f"❌ Error syncing Shopify orders: {sync_err}")
 

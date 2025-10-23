@@ -46,8 +46,6 @@ class InsightGenerationTool(BaseTool):
             inventory_data = business_data.get("inventory_data", [])
             campaign_data = business_data.get("campaign_data", [])
 
-            # Aggregate sales data by product (30-day and 14-day summaries)
-            product_summary = self._aggregate_sales_by_product(sales_data)
             # Limit inventory data to top 20 items to reduce LLM context
             inventory_data_limited = inventory_data[:20] if len(inventory_data) > 20 else inventory_data
 
@@ -81,10 +79,10 @@ class InsightGenerationTool(BaseTool):
             analysis_prompt = f"""
             You are a business intelligence analyst. Analyze the following query and business data, then provide a comprehensive response.
 
-            {conversation_context}CURRENT USER QUERY: "{query}"
+            {conversation_context} CURRENT USER QUERY: "{query}"
 
-            PRODUCT PERFORMANCE SUMMARY (last 30 days):
-            {json.dumps(product_summary, indent=2, default=json_serializer)}
+            SALES DATA:
+            {sales_data}
 
             INVENTORY DATA (top {len(inventory_data_limited)} items):
             {json.dumps(inventory_data_limited, indent=2, default=json_serializer)}
@@ -172,7 +170,7 @@ class InsightGenerationTool(BaseTool):
             try:
                 result = json.loads(response.content.strip())
                 logger.info(f"Unified analysis complete: {len(result.get('recommendations', []))} recommendations, {len(result.get('alerts', []))} alerts, {len(result.get('suggested_actions', []))} suggested actions")
-                logger.info(f"Full LLM response: {json.dumps(result, indent=2, default=json_serializer)}")
+                # logger.info(f"Full LLM response: {json.dumps(result, indent=2, default=json_serializer)}")
                 return result
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse LLM response as JSON: {e}")
@@ -223,72 +221,6 @@ class InsightGenerationTool(BaseTool):
         # Default: use expert insights
         return True
 
-    def _aggregate_sales_by_product(self, sales_data: List[Dict]) -> List[Dict]:
-        """
-        Aggregate sales data by product with both 30-day and 14-day summaries.
-        Returns list of products sorted by 30-day revenue.
-        """
-        from collections import defaultdict
-        from datetime import datetime, timedelta
-
-        product_stats = defaultdict(lambda: {
-            'total_revenue_30d': 0,
-            'total_units_30d': 0,
-            'transaction_count_30d': 0,
-            'total_revenue_14d': 0,
-            'total_units_14d': 0,
-            'transaction_count_14d': 0,
-            'product_name': None,
-            'product_id': None
-        })
-
-        # Calculate date thresholds
-        now = datetime.now()
-        two_weeks_ago = now - timedelta(days=14)
-
-        for item in sales_data:
-            if not isinstance(item, dict):
-                continue
-
-            # Extract product identifier
-            product_id = item.get('product_id') or item.get('id') or 'unknown'
-            product_name = item.get('product_name') or item.get('name') or f"Product {product_id}"
-
-            # Extract revenue
-            revenue = float(item.get('total_amount') or item.get('sales_amount') or item.get('amount') or 0)
-
-            # Extract units
-            units = int(item.get('quantity') or item.get('units_sold') or item.get('qty') or 1)
-
-            # Extract and parse date
-            sale_date_str = item.get('sale_date') or item.get('order_date') or item.get('created_at')
-            is_recent = False
-            if sale_date_str:
-                try:
-                    # Handle different date formats
-                    sale_date = datetime.fromisoformat(str(sale_date_str).replace('Z', '+00:00'))
-                    is_recent = sale_date >= two_weeks_ago
-                except:
-                    pass
-
-            # Aggregate for 30-day period (all data)
-            product_stats[product_id]['product_id'] = product_id
-            product_stats[product_id]['product_name'] = product_name
-            product_stats[product_id]['total_revenue_30d'] += revenue
-            product_stats[product_id]['total_units_30d'] += units
-            product_stats[product_id]['transaction_count_30d'] += 1
-
-            # Aggregate for 14-day period (recent only)
-            if is_recent:
-                product_stats[product_id]['total_revenue_14d'] += revenue
-                product_stats[product_id]['total_units_14d'] += units
-                product_stats[product_id]['transaction_count_14d'] += 1
-
-        # Convert to list and sort by 30-day revenue
-        result = list(product_stats.values())
-        result.sort(key=lambda x: x['total_revenue_30d'], reverse=True)
-
-        return result
 
     def _retrieve_expert_knowledge(self, query: str, sales_data: List[Dict] = None) -> str:
         """Retrieve relevant expert marketing insights from vector database"""

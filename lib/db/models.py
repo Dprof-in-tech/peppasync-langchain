@@ -12,4 +12,4 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     otp_code = Column(String(10), nullable=True)              # Stores the OTP code (optional, max 10 chars)
     otp_expires_at = Column(DateTime, nullable=True)          # When the OTP expires (optional)
-    is_verified = Column(Integer, default=0)
+    is_verified = Column(Integer, default=False)

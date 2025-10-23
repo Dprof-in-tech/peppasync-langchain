@@ -181,7 +181,7 @@ class DemandForecastDirectTool(BaseTool):
         object.__setattr__(self, 'advisor', Advisor())
 
 
-    def _run(
+    async def _run(
         self,
         session_id: str,
         user_prompt: str,
@@ -203,7 +203,7 @@ class DemandForecastDirectTool(BaseTool):
             Dict with forecast results (not JSON string)
         """
         try:
-            forecast_context = self.context_layer.prepare_forecast_context(
+            forecast_context = await self.context_layer.prepare_forecast_context(
                 session_id=session_id,
                 user_prompt=user_prompt,
                 product_filter=product_filter,

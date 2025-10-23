@@ -28,7 +28,7 @@ class UnifiedBusinessAgent:
         No more LLM planning, no more reference resolvers, no more multi-step orchestration.
         """
         try:
-            logger.info(f"Analyzing query: {query}")
+            # logger.info(f"Analyzing query: {query}")
 
             # Just call the unified analysis tool directly - it does everything
             result = await self.tools["unified_analysis"]._arun(query, business_data, conversation_history or [])

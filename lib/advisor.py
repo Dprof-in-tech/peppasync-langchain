@@ -166,7 +166,7 @@ class Advisor:
         if supply_chain_alerts:
             earliest_order = supply_chain_alerts[0]
             recommendations.append(
-                f"📦 First order deadline: {earliest_order['order_by_date']} "
+                f" First order deadline: {earliest_order['order_by_date']} "
                 f"for {earliest_order['location']} "
                 f"(lead time: {earliest_order['lead_time_days']} days)"
             )

@@ -167,10 +167,10 @@ curl -X POST "http://localhost:8000/chat" \
 python test_advanced_prompts.py
 
 # Expected output:
-# ✅ Category classification accuracy > 85%
-# ✅ Response quality scores > 7.0/10
-# ✅ Average response time < 3 seconds
-# ✅ Context handling for follow-up questions
+# Category classification accuracy > 85%
+# Response quality scores > 7.0/10
+# Average response time < 3 seconds
+# Context handling for follow-up questions
 ```
 
 ### Expected System Capabilities

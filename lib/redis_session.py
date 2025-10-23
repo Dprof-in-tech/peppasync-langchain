@@ -53,7 +53,7 @@ class RedisSessionManager:
             # Test connection
             self._redis_client.ping()
             self._is_connected = True
-            logger.info(f"✅ Redis connected successfully: {redis_url}")
+            logger.info(f"Redis connected successfully: {redis_url}")
 
         except (RedisError, RedisConnectionError) as e:
             self._is_connected = False

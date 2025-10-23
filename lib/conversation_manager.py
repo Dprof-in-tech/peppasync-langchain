@@ -164,59 +164,59 @@ class ConversationManager:
             
             # Load all available data and let the agent decide what it needs
             database_manager = DatabaseManager()
+            # Check for database or Shopify connection
+            has_db = DatabaseManager.has_user_connection(state.session_id)
+            shopify_session_id = f"shopify:{state.session_id}"
+            has_shopify = DatabaseManager.get_shopify_connection(state.session_id) or DatabaseManager.get_shopify_connection(shopify_session_id)
             
-            # Check if user has database connected
-            if DatabaseManager.has_user_connection(state.session_id):
-                logger.info("User has database connected - using unified agent with user data")
-                
-                # Intelligently fetch only relevant data based on query keywords
+            if has_db or has_shopify:
+                logger.info("User has business data connected (database or Shopify) - using unified agent with user data")
                 query_lower = state.query.lower()
                 business_data = {}
-                
-                # Always include sales data as it's the most common
-                business_data["sales_data"] = database_manager.get_data(state.session_id, "sales_data")
-                
+                # Always include sales data
+                if has_db:
+                    business_data["sales_data"] = await database_manager.get_data(state.session_id, "sales_data")
+                elif has_shopify:
+                    # Try both keys for robustness
+                    business_data["sales_data"] = await database_manager.get_data(state.session_id, "sales_data")
                 # Fetch campaign data if query mentions campaigns, marketing, ads, or ROAS
                 if any(keyword in query_lower for keyword in ['campaign', 'marketing', 'ad', 'roas', 'spend', 'advertising']):
-                    business_data["campaign_data"] = database_manager.get_data(state.session_id, "campaign_data")
+                    if has_db:
+                        business_data["campaign_data"] = await database_manager.get_data(state.session_id, "campaign_data")
+                    elif has_shopify:
+                        business_data["campaign_data"] = await database_manager.get_data(state.session_id, "campaign_data")
                     logger.info("Fetching campaign data based on query keywords")
-                
                 # Fetch inventory data if query mentions inventory, stock, or products
                 if any(keyword in query_lower for keyword in ['inventory', 'stock', 'product', 'reorder', 'out of stock']):
-                    business_data["inventory_data"] = database_manager.get_data(state.session_id, "inventory_data")
+                    if has_db or has_shopify:
+                        business_data["inventory_data"] = await database_manager.get_data(state.session_id, "inventory_data")
                     logger.info("Fetching inventory data based on query keywords")
-                
                 # Fetch customer data if query mentions customers, users, or retention
                 if any(keyword in query_lower for keyword in ['customer', 'user', 'client', 'retention', 'churn', 'lifetime']):
-                    business_data["customer_data"] = database_manager.get_data(state.session_id, "customer_data")
+                    if has_db:
+                        business_data["customer_data"] = await database_manager.get_data(state.session_id, "customer_data")
+                    elif has_shopify:
+                        business_data["customer_data"] = await database_manager.get_data(shopify_session_id, "customer_data")
                     logger.info("Fetching customer data based on query keywords")
-                
                 # Create unified agent with all tools available
                 unified_agent = UnifiedBusinessAgent(session_id=state.session_id)
-                
                 # Direct query to agent with full context
                 response_data = await unified_agent.analyze_direct_query(
                     query=state.query,
                     business_data=business_data,
                     conversation_history=state.conversation_history
                 )
-                
                 state.response = response_data
-                
             else:
-                logger.info("No database connected - providing general business advice")
-                
-                # Create a simple general advice response
-                general_advice = f"I'd be happy to help with your question: '{state.query}'. To provide specific insights about your business, I would need access to your business data. You can connect your database to get personalized analysis, or I can provide general business advice based on industry best practices."
-                
-                # Structure as JSON for consistency
+                logger.info("No business data connected - providing general business advice")
+                general_advice = f"I'd be happy to help with your question: '{state.query}'. To provide specific insights about your business, I would need access to your business data. You can connect your database or Shopify store to get personalized analysis, or I can provide general business advice based on industry best practices."
                 structured_response = {
                     "type": "general_advice",
                     "insights": general_advice,
                     "recommendations": [
                         {
-                            "title": "Connect Your Database",
-                            "description": "Link your business database to get specific insights about your products, sales, and customers.",
+                            "title": "Connect Your Data Source",
+                            "description": "Link your business database or Shopify store to get specific insights about your products, sales, and customers.",
                             "priority": "HIGH"
                         }
                     ],
@@ -226,7 +226,6 @@ class ConversationManager:
                         "timestamp": int(time.time())
                     }
                 }
-                
                 import json
                 state.response = json.dumps(structured_response, indent=2)
             

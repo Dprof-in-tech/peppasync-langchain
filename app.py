@@ -16,13 +16,13 @@ from lib.utils.utils import parse_api_response
 from lib.conversation_manager import ConversationManager
 from lib.agent import UnifiedBusinessAgent
 from lib.prompt_engine import PeppaPromptEngine
-from lib.config import AppConfig, LLMManager, DatabaseManager
+from lib.config import AppConfig, DatabaseManager
 from lib.tool_registry import ToolRegistry
 from lib.forecast_settings import ForecastSettingsManager
 from lib.tools.forecast_tool import DemandForecastDirectTool
 
 # Import the new database components and user router
-from lib.db.database import Base, engine # Base and engine are needed for table creation
+from lib.db.database import Base, engine
 from lib.api.routes.user import user_router
 
 # Load environment variables
@@ -31,6 +31,8 @@ load_dotenv()
 # Set logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+FUNDAM_API_KEY = os.getenv("FUNDAM_API_KEY")
 
 # Validate configuration
 if not AppConfig.validate_config():
@@ -80,7 +82,7 @@ async def startup_event():
         from lib.redis_session import redis_session_manager
         redis_health = redis_session_manager.health_check()
         if redis_health['available']:
-            logger.info(f"✅ Redis session manager ready - {redis_health.get('redis_version', 'unknown version')}")
+            logger.info(f"Redis session manager ready - {redis_health.get('redis_version', 'unknown version')}")
         else:
             logger.warning(f"⚠️  Redis not available: {redis_health.get('message', 'unknown error')}")
             logger.warning("Sessions will use in-memory fallback storage")
@@ -168,6 +170,25 @@ async def get_dashboard_analytics(request: AnalyticsRequest):
         cache_key = f"dashboard_{data_source}_{session_id}"
         current_time = time.time()
 
+        # BACKEND GUARD: Check if session is connected before proceeding
+        is_connected = False
+        if data_source == "shopify":
+            connection = DatabaseManager.get_shopify_connection(session_id)
+            is_connected = connection is not None
+        else:
+            is_connected = DatabaseManager.has_user_connection(session_id)
+
+        if not is_connected:
+            logger.warning(f"Dashboard analytics requested for disconnected session: {session_id} [{data_source}]")
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    'error': 'Session is not connected. Please connect your data source first.',
+                    'session_id': session_id,
+                    'data_source': data_source
+                }
+            )
+
         if cache_key in dashboard_cache:
             cached_data, cache_time = dashboard_cache[cache_key]
             if current_time - cache_time < CACHE_DURATION:
@@ -191,20 +212,20 @@ async def get_dashboard_analytics(request: AnalyticsRequest):
                 for o in shopify_orders
             ]
             # Inventory and campaign data from Shopify not implemented (could be added if available)
-            inventory_data = []
+            inventory_data = await DatabaseManager.get_data(session_id=session_id, query_type="inventory_data", use_mock=False)
             campaign_data = []
         else:
             # Default: Postgres
-            sales_data = DatabaseManager.get_data(session_id=session_id, query_type="sales_data", use_mock=False)
+            sales_data = await DatabaseManager.get_data(session_id=session_id, query_type="sales_data", use_mock=False)
             if not sales_data:
                 logger.info("No real sales data found, using mock data for dashboard")
-                sales_data = DatabaseManager.get_data(session_id=session_id, query_type="sales_data", use_mock=True)
-            inventory_data = DatabaseManager.get_data(session_id=session_id, query_type="inventory_data", use_mock=False)
+                sales_data = await DatabaseManager.get_data(session_id=session_id, query_type="sales_data", use_mock=True)
+            inventory_data = await DatabaseManager.get_data(session_id=session_id, query_type="inventory_data", use_mock=False)
             if not inventory_data:
-                inventory_data = DatabaseManager.get_data(session_id=session_id, query_type="inventory_data", use_mock=True)
-            campaign_data = DatabaseManager.get_data(session_id=session_id, query_type="campaign_data", use_mock=False)
+                inventory_data = await DatabaseManager.get_data(session_id=session_id, query_type="inventory_data", use_mock=True)
+            campaign_data = await DatabaseManager.get_data(session_id=session_id, query_type="campaign_data", use_mock=False)
             if not campaign_data:
-                campaign_data = DatabaseManager.get_data(session_id=session_id, query_type="campaign_data", use_mock=True)
+                campaign_data = await DatabaseManager.get_data(session_id=session_id, query_type="campaign_data", use_mock=True)
 
         # Calculate key metrics with flexible field mapping
         def get_sales_amount(item):
@@ -299,230 +320,6 @@ async def get_dashboard_analytics(request: AnalyticsRequest):
             status_code=500,
             detail={
                 'error': 'Dashboard analytics failed',
-                'message': str(e)
-            }
-        )
-
-
-@app.post("/analytics/{analysis_type}")
-async def run_analytics(analysis_type: str, request: AnalyticsRequest):
-    """Run analytics using the unified business agent"""
-    try:
-        session_id = request.filters.get("session_id", "default-session") if request.filters else "default-session"
-
-        # Get business data for analysis
-        business_data = {
-            "sales_data": DatabaseManager.get_data(session_id, "sales_data"),
-            "inventory_data": DatabaseManager.get_data(session_id, "inventory_data"),
-            "campaign_data": DatabaseManager.get_data(session_id, "campaign_data"),
-        }
-
-        # Use analyze_direct_query with proper business data
-        result_str = await business_agent.analyze_direct_query(
-            query=f"Analyze {analysis_type} for business insights",
-            business_data=business_data,
-            conversation_history=[]
-        )
-
-        # Parse JSON response
-        import json
-        result = json.loads(result_str)
-
-        logger.info(f"Analytics executed: {analysis_type}")
-        return result
-
-    except Exception as e:
-        logger.error(f"Error in analytics endpoint: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                'error': f'Analytics failed for {analysis_type}',
-                'message': str(e)
-            }
-        )
-
-
-@app.post("/agents/inventory/run")
-async def run_inventory_agent():
-    """Run inventory monitoring using unified business agent"""
-    try:
-        session_id = "default-session"  # Could be passed as query param if needed
-
-        # Get business data for analysis
-        business_data = {
-            "inventory_data": DatabaseManager.get_data(session_id, "inventory_data"),
-            "low_stock_items": DatabaseManager.get_data(session_id, "low_stock_items"),
-        }
-
-        # Use analyze_direct_query
-        result_str = await business_agent.analyze_direct_query(
-            query="Monitor inventory levels and generate alerts for low stock items",
-            business_data=business_data,
-            conversation_history=[]
-        )
-
-        # Parse JSON response
-        import json
-        result = json.loads(result_str)
-
-        logger.info(f"Inventory analysis executed: {result.get('type')}")
-        return result
-
-    except Exception as e:
-        logger.error(f"Error running inventory analysis: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                'error': 'Inventory analysis failed',
-                'message': str(e),
-                'status': 'error'
-            }
-        )
-
-
-@app.post("/agents/marketing/run")
-async def run_marketing_agent():
-    """Run marketing optimization using unified business agent"""
-    try:
-        session_id = "default-session"  # Could be passed as query param if needed
-
-        # Get business data for analysis
-        business_data = {
-            "campaign_data": DatabaseManager.get_data(session_id, "campaign_data"),
-            "underperforming_campaigns": DatabaseManager.get_data(session_id, "underperforming_campaigns"),
-        }
-
-        # Use analyze_direct_query
-        result_str = await business_agent.analyze_direct_query(
-            query="Analyze marketing campaign performance and optimize ROAS",
-            business_data=business_data,
-            conversation_history=[]
-        )
-
-        # Parse JSON response
-        import json
-        result = json.loads(result_str)
-
-        logger.info(f"Marketing analysis executed: {result.get('type')}")
-        return result
-
-    except Exception as e:
-        logger.error(f"Error running marketing analysis: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                'error': 'Marketing analysis failed',
-                'message': str(e),
-                'status': 'error'
-            }
-        )
-
-
-
-# Internal function for prompt analysis (used by other endpoints)
-async def _analyze_business_prompt_internal(prompt: str):
-    """Internal function to analyze and classify business intelligence prompts"""
-    try:
-        analysis = await prompt_engine.analyze_prompt(prompt)
-
-        # Generate sophisticated response if it's a complex business query
-        if analysis.get('confidence', 0) > 0.6:
-            sophisticated_response = await prompt_engine.generate_sophisticated_response(analysis)
-            analysis['generated_response'] = sophisticated_response
-
-        logger.info(f"Analyzed prompt: {analysis.get('category')} - {analysis.get('analysis_type')}")
-        return analysis
-
-    except Exception as e:
-        logger.error(f"Error analyzing prompt: {e}")
-        return {
-            'error': 'Failed to analyze prompt',
-            'message': str(e),
-            'category': 'general_analysis',
-            'analysis_type': 'descriptive',
-            'confidence': 0.3
-        }
-
-
-@app.get("/prompt-capabilities")
-async def get_prompt_capabilities():
-    """Get supported business intelligence categories and sample questions"""
-    try:
-        capabilities = prompt_engine.get_supported_categories()
-
-        return {
-            "supported_categories": capabilities,
-            "total_categories": len(capabilities),
-            "analysis_types": [
-                "predictive", "scenario", "diagnostic",
-                "prescriptive", "comparative", "descriptive"
-            ],
-            "specializations": [
-                "Global ecommerce market",
-                "Sales forecasting",
-                "Marketing optimization",
-                "Inventory management",
-                "Customer analytics",
-                "Financial analysis"
-            ],
-            "timestamp": int(time.time())
-        }
-
-    except Exception as e:
-        logger.error(f"Error getting capabilities: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={'error': 'Failed to get capabilities'}
-        )
-
-
-@app.post("/unified-analysis")
-async def unified_business_analysis(request: ChatRequest):
-    """New unified business analysis endpoint showcasing the refactored architecture"""
-    session_id = request.session_id or str(uuid.uuid4())
-
-    try:
-        # First classify the prompt using internal function
-        analysis = await _analyze_business_prompt_internal(request.prompt)
-
-        # Use unified business agent for comprehensive analysis
-        business_result = await business_agent.analyze(
-            query=request.prompt,
-            business_category=analysis.get('category', 'general_analysis'),
-            analysis_type=analysis.get('analysis_type', 'descriptive')
-        )
-
-        return {
-            "unified_analysis": {
-                "status": business_result.get("status"),
-                "insights": business_result.get("insights"),
-                "alerts": business_result.get("alerts", []),
-                "recommendations": business_result.get("recommendations", []),
-                "data_summary": business_result.get("data_summary", {})
-            },
-            "prompt_classification": {
-                "category": analysis.get('category'),
-                "analysis_type": analysis.get('analysis_type'),
-                "confidence": analysis.get('confidence'),
-                "key_metrics": analysis.get('key_metrics', []),
-                "time_horizon": analysis.get('time_horizon')
-            },
-            "system_info": {
-                "architecture": "Unified Business Agent",
-                "tools_used": business_agent.get_available_tools(),
-                "workflow_executed": f"{analysis.get('category', 'general')}_analysis"
-            },
-            "sessionId": session_id,
-            "timestamp": int(time.time())
-        }
-
-    except Exception as e:
-        logger.error(f"Error in unified analysis: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                'error': 'Unified analysis failed',
-                'sessionId': session_id,
                 'message': str(e)
             }
         )
@@ -724,6 +521,12 @@ async def get_database_status(session_id: str):
 async def disconnect_database(session_id: str):
     """Disconnect database for a session"""
     try:
+        # Clear dashboard cache for this session/postgres
+        cache_key = f"dashboard_postgres_{session_id}"
+        if cache_key in dashboard_cache:
+            del dashboard_cache[cache_key]
+            logger.info(f"Dashboard cache cleared for session {session_id} [postgres]")
+
         if DatabaseManager.has_user_connection(session_id):
             DatabaseManager.remove_user_connection(session_id)
             logger.info(f"Database disconnected for session {session_id}")
@@ -778,10 +581,14 @@ async def connect_shopify(request: ShopifyConnectRequest):
         )
 
         if result.get("success"):
+            connection_id = await shopify_service.get_connection_id_by_shop(
+                shop_name=request.shop_name
+            )
             # Store connection info
             connection_data = {
                 "shop_name": request.shop_name,
                 "connected_at": time.time(),
+                "connection_id": connection_id,
                 "redirect_url": request.redirect_url
             }
             DatabaseManager.store_shopify_connection(
@@ -854,7 +661,7 @@ async def get_shopify_status(session_id: str):
 
                     # Check if we have access_token in connection data
                     # access_token = connection.get("access_token")
-                    access_token = '15|dIKpifYjKg4jlutB5mZidgG9x4x1iDsdHNLPEfgR9f09d70d'
+                    access_token = FUNDAM_API_KEY
 
                     if access_token:
                         logger.info(f"Auto-syncing orders for {shop_name}")
@@ -872,7 +679,7 @@ async def get_shopify_status(session_id: str):
 
                         # Refresh orders after sync
                         orders = DatabaseManager.get_shopify_orders(session_id)
-                        logger.info(f"✅ Auto-sync completed: {orders_synced} orders synced")
+                        logger.info(f"Auto-sync completed: {orders_synced} orders synced")
                     else:
                         logger.info(f"No access_token available yet for {shop_name}. User may need to complete OAuth.")
 
@@ -942,7 +749,7 @@ async def shopify_oauth_callback(request: Request):
         # Store updated connection
         DatabaseManager.store_shopify_connection(session_id, shop_name, connection)
 
-        logger.info(f"✅ Access token stored for {shop_name}")
+        logger.info(f"Access token stored for {shop_name}")
 
         # Trigger auto-sync immediately
         try:
@@ -960,7 +767,7 @@ async def shopify_oauth_callback(request: Request):
             connection["last_sync"] = time.time()
             DatabaseManager.store_shopify_connection(session_id, shop_name, connection)
 
-            logger.info(f"✅ OAuth callback: {orders_synced} orders synced for {shop_name}")
+            logger.info(f"OAuth callback: {orders_synced} orders synced for {shop_name}")
 
             return {
                 "success": True,
@@ -998,6 +805,12 @@ async def shopify_oauth_callback(request: Request):
 async def disconnect_shopify(session_id: str):
     """Disconnect Shopify store from session"""
     try:
+        # Clear dashboard cache for this session/shopify
+        cache_key = f"dashboard_shopify_{session_id}"
+        if cache_key in dashboard_cache:
+            del dashboard_cache[cache_key]
+            logger.info(f"Dashboard cache cleared for session {session_id} [shopify]")
+
         connection = DatabaseManager.get_shopify_connection(session_id)
 
         if connection:
@@ -1176,7 +989,7 @@ async def tune_forecast_hyperparameters(request: ForecastRequest):
         economic_events = settings.get("economic_events", [])
 
         # Fetch historical data
-        historical_data = context_layer._fetch_historical_data(
+        historical_data = await context_layer._fetch_historical_data(
             session_id,
             request.product_filter,
             lookback_days=180  # Use more data for tuning
@@ -1276,7 +1089,7 @@ async def run_demand_forecast(request: ForecastRequest):
         # Use the direct forecast tool (returns Dict, not JSON string)
         forecast_tool = DemandForecastDirectTool()
 
-        result = forecast_tool._run(
+        result = await forecast_tool._run(
             session_id=session_id,
             user_prompt=request.user_prompt,
             product_filter=request.product_filter,
@@ -1400,12 +1213,8 @@ async def root():
             "market_specialization": "Global ecommerce market focus"
         },
         "available_tools": business_agent.get_available_tools(),
-        "available_workflows": business_agent.get_available_workflows(),
         "endpoints": {
             "/chat": "Enhanced conversational BI with unified agent",
-            "/analytics/{type}": "Business analytics using unified workflows",
-            "/agents/inventory/run": "Inventory monitoring and alerts",
-            "/agents/marketing/run": "Marketing optimization and ROAS analysis",
             "/database/test": "Test PostgreSQL database connection",
             "/database/connect": "Connect PostgreSQL database to session",
             "/database/status/{session_id}": "Get database connection status",

@@ -133,22 +133,20 @@ class DatabaseManager:
     def remove_shopify_session(cls, session_id: str):
         """
         Remove Shopify connection and orders for a session (disconnect Shopify).
+        Handles both plain and 'shopify:'-prefixed session IDs for robustness.
         """
         redis_manager = cls._get_redis_manager()
-        conn_key = f"shopify:{session_id}"
-        orders_key = f"shopify:orders:{session_id}"
+        keys = [f"shopify:{session_id}", f"shopify:orders:{session_id}", session_id, f"orders:{session_id}"]
         # Remove from Redis
         if redis_manager and redis_manager.is_available():
-            redis_manager.delete(conn_key)
-            redis_manager.delete(orders_key)
-            logger.info(f"Shopify session deleted from Redis: {session_id}")
+            for key in keys:
+                redis_manager.delete(key)
+            logger.info(f"Shopify session and orders deleted from Redis: {session_id}")
         # Remove from in-memory
-        if conn_key in cls._user_connections:
-            del cls._user_connections[conn_key]
-            logger.info(f"Shopify connection deleted from memory: {session_id}")
-        if orders_key in cls._user_connections:
-            del cls._user_connections[orders_key]
-            logger.info(f"Shopify orders deleted from memory: {session_id}")
+        for key in keys:
+            if key in cls._user_connections:
+                del cls._user_connections[key]
+                logger.info(f"Shopify data deleted from memory: {key}")
     """Database connection manager with support for user database connections"""
 
     _user_connections: Dict[str, Dict[str, Any]] = {}  # Fallback in-memory storage
@@ -238,7 +236,7 @@ class DatabaseManager:
             logger.info(f"Session deleted from memory: {session_id}")
 
     @classmethod
-    def get_data(cls, session_id: str, query_type: str, use_mock: bool = False, lookback_days: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def get_data(cls, session_id: str, query_type: str, use_mock: bool = False, lookback_days: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Get data based on session and query type
 
@@ -251,12 +249,123 @@ class DatabaseManager:
         Returns:
             List of data records
         """
-        # If user has connected their database and use_mock is False
+        # 1. Try Shopify if connected and not using mock
+        if not use_mock:
+            shopify_conn = cls.get_shopify_connection(session_id)
+            if shopify_conn:
+                try:
+                    from lib.shopify_service import get_shopify_service
+                    connection_id = shopify_conn.get("connection_id")
+                    
+                    shopify_service = get_shopify_service()
+                    if query_type == "sales_data":
+                        # Fetch orders from Shopify
+                        orders = await shopify_service.fetch_shopify_orders(connection_id)
+                        return cls._transform_shopify_data(orders, query_type, lookback_days=lookback_days)
+                    elif query_type == "inventory_data":
+                        # Fetch products from Shopify
+                        products = await shopify_service.fetch_shopify_products(connection_id)
+                        return cls._transform_shopify_products(products)
+                except Exception as e:
+                    logger.error(f"Error fetching Shopify {query_type}: {e}")
+        # 2. Try Postgres if connected and not using mock
         if not use_mock and cls.has_user_connection(session_id):
             return cls._get_user_data(session_id, query_type, lookback_days=lookback_days)
-        else:
-            # Fall back to mock data
-            return cls._get_mock_data_by_type(query_type)
+        # 3. Fallback to mock data
+        return cls._get_mock_data_by_type(query_type)
+
+    @classmethod
+    def _transform_shopify_products(cls, products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Transform Shopify products to the expected inventory_data format.
+        """
+        if not products:
+            return []
+        result = []
+        for p in products:
+            result.append({
+                "product_name": p.get("title") or p.get("name"),
+                "current_stock": p.get("total_inventory"),
+                "reorder_level": p.get("reorder_level"),
+                "category": p.get("product_type") or p.get("category"),
+                "supplier": p.get("vendor")
+            })
+        return result
+
+    @classmethod
+    def _transform_shopify_data(cls, orders: List[Dict[str, Any]], query_type: str, lookback_days: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Transform Shopify orders to the expected format for analytics endpoints.
+        Supports 'sales_data' and 'inventory_data'.
+        """
+        from datetime import datetime, timedelta
+        if not orders:
+            return []
+        now = datetime.now()
+        days = lookback_days or 30
+        cutoff = now - timedelta(days=days)
+
+        if query_type == "sales_data":
+            # Aggregate sales by product (handle Shopify API structure, never use order subtotal)
+            sales = {}
+            for order in orders:
+                order_date = None
+                for date_key in ["created_at", "order_created_at", "order_date", "processed_at"]:
+                    if order.get(date_key):
+                        try:
+                            order_date = datetime.fromisoformat(str(order[date_key]).replace("Z", "+00:00"))
+                        except Exception:
+                            continue
+                        break
+                if order_date and order_date < cutoff:
+                    continue
+                for item in order.get("line_items", []):
+                    node = item.get("node", item)
+                    pname = node.get("title") or node.get("name")
+                    if not pname:
+                        continue
+                    key = pname
+                    price = 0.0
+                    if node.get("originalUnitPriceSet") and node["originalUnitPriceSet"].get("shopMoney"):
+                        price = float(node["originalUnitPriceSet"]["shopMoney"].get("amount", 0))
+                    elif node.get("price"):
+                        price = float(node["price"])
+                    quantity = int(node.get("quantity", 1))
+                    category = node.get("product_type") or node.get("category") or node.get("variantTitle") or ""
+                    if key not in sales:
+                        sales[key] = {
+                            "product_name": pname,
+                            "sales_amount": 0,
+                            "units_sold": 0,
+                            "category": category,
+                            "profit_margin": None  # Shopify doesn't provide this
+                        }
+                    # Only add price*quantity for this product, never use order subtotal
+                    sales[key]["sales_amount"] += price * quantity
+                    sales[key]["units_sold"] += quantity
+            return list(sales.values())
+
+        elif query_type == "inventory_data":
+            # Try to extract inventory from line_items (Shopify API doesn't provide real-time inventory here)
+            inventory = {}
+            for order in orders:
+                for item in order.get("line_items", []):
+                    pname = item.get("name")
+                    if not pname:
+                        continue
+                    key = pname
+                    if key not in inventory:
+                        inventory[key] = {
+                            "product_name": pname,
+                            "current_stock": None,  # Not available from orders
+                            "reorder_level": None,
+                            "category": item.get("product_type") or item.get("category") or "",
+                            "supplier": None
+                        }
+            return list(inventory.values())
+
+        # For unsupported types, return empty
+        return []
 
     @classmethod
     def _get_user_data(cls, session_id: str, query_type: str, lookback_days: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -948,6 +1057,7 @@ class DatabaseManager:
 
         shopify_info = {
             "shop_name": shop_name,
+            "connection_id": connection_data.get("connection_id"),
             "connected_at": datetime.now().isoformat(),
             "connection_data": connection_data
         }
@@ -958,11 +1068,11 @@ class DatabaseManager:
                 json.dumps(shopify_info),
                 ttl=86400 * 30  # 30 days TTL
             )
-            logger.info(f"✅ Shopify connection stored in Redis for {shop_name}")
+            logger.info(f"Shopify connection stored in Redis for {shop_name}")
         else:
             # Fallback to in-memory
             cls._user_connections[f"shopify:{session_id}"] = shopify_info
-            logger.info(f"✅ Shopify connection stored in memory for {shop_name}")
+            logger.info(f"Shopify connection stored in memory for {shop_name}")
 
     @classmethod
     def get_shopify_connection(cls, session_id: str) -> Optional[Dict[str, Any]]:
@@ -1013,10 +1123,10 @@ class DatabaseManager:
                 json.dumps(orders_data),
                 ttl=86400 * 7  # 7 days TTL
             )
-            logger.info(f"✅ Stored {len(orders)} Shopify orders in Redis")
+            logger.info(f"Stored {len(orders)} Shopify orders in Redis")
         else:
             cls._user_connections[f"shopify:orders:{session_id}"] = orders_data
-            logger.info(f"✅ Stored {len(orders)} Shopify orders in memory")
+            logger.info(f"Stored {len(orders)} Shopify orders in memory")
 
         # Update connection info with counts
         connection_info = cls.get_shopify_connection(session_id)

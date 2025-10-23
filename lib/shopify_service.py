@@ -3,13 +3,14 @@ Shopify Integration Service
 Handles connection, authentication, and data syncing with Shopify stores via external connector
 """
 
-import httpx
+import httpx, os
 import logging
 from typing import Dict, List, Optional, Any
 import json
 
 logger = logging.getLogger(__name__)
 
+FUNDAM_API_KEY = os.getenv("FUNDAM_API_KEY")
 
 class ShopifyService:
     """
@@ -26,7 +27,7 @@ class ShopifyService:
         self,
         shop_name: str,
         redirect_url: str,
-        bearer_token: Optional[str] = '15|dIKpifYjKg4jlutB5mZidgG9x4x1iDsdHNLPEfgR9f09d70d',
+        bearer_token: Optional[str] = FUNDAM_API_KEY,
         session_id: Optional[str] = ""
     ) -> Dict[str, Any]:
         """
@@ -58,7 +59,7 @@ class ShopifyService:
             logger.info(f"Connector response: {response.status_code} - {response.text}")
 
             if response.status_code == 200:
-                logger.info(f"✅ Shopify connection initiated for {shop_name}")
+                logger.info(f"Shopify connection initiated for {shop_name}")
 
                 # Parse response data
                 response_data = response.json() if response.text else {}
@@ -95,7 +96,7 @@ class ShopifyService:
 
     async def get_connections(
         self,
-        bearer_token: str = '15|dIKpifYjKg4jlutB5mZidgG9x4x1iDsdHNLPEfgR9f09d70d'
+        bearer_token: str = FUNDAM_API_KEY
     ) -> List[Dict[str, Any]]:
         """
         Get list of all Shopify connections for this user.
@@ -107,7 +108,7 @@ class ShopifyService:
             List of connections with their IDs
         """
         try:
-            logger.info(f"📋 Fetching Shopify connections")
+            logger.info(f" Fetching Shopify connections")
 
             url = f"{self.connector_base_url}/connections"
 
@@ -119,7 +120,7 @@ class ShopifyService:
                 data = response.json() if response.text else {}
                 # Response structure: {'success': True, 'connections': [...]}
                 connections = data.get("connections", [])
-                logger.info(f"✅ Retrieved {len(connections)} connections")
+                logger.info(f"Retrieved {len(connections)} connections")
                 return connections
             else:
                 logger.error(f"❌ Connections fetch failed: {response.status_code}")
@@ -132,7 +133,7 @@ class ShopifyService:
     async def get_connection_id_by_shop(
         self,
         shop_name: str,
-        bearer_token: str = '15|dIKpifYjKg4jlutB5mZidgG9x4x1iDsdHNLPEfgR9f09d70d'
+        bearer_token: str = FUNDAM_API_KEY
     ) -> Optional[int]:
         """
         Get connection ID for a specific shop name.
@@ -157,7 +158,7 @@ class ShopifyService:
                 # Check if shop_name is in the slug (e.g., "dewdrop-labs-2" in "dewdrop-labs-2.myshopify.com")
                 if shop_name in slug:
                     connection_id = conn.get("id")
-                    logger.info(f"✅ Found connection ID {connection_id} for {shop_name} (slug: {slug})")
+                    logger.info(f"Found connection ID {connection_id} for {shop_name} (slug: {slug})")
                     return connection_id
 
             logger.warning(f"⚠️  No connection found for shop: {shop_name}")
@@ -172,7 +173,7 @@ class ShopifyService:
         self,
         customer_id: int,
         connection_id: int,
-        bearer_token: Optional[str] = '15|dIKpifYjKg4jlutB5mZidgG9x4x1iDsdHNLPEfgR9f09d70d'
+        bearer_token: Optional[str] = FUNDAM_API_KEY
     ) -> Dict[str, Any]:
         """
         Get single customer from Shopify via connector.
@@ -199,7 +200,7 @@ class ShopifyService:
             response = await self.client.get(url, json=payload, headers=headers)
 
             if response.status_code == 200:
-                logger.info(f"✅ Customer {customer_id} retrieved")
+                logger.info(f"Customer {customer_id} retrieved")
                 return {
                     "success": True,
                     "customer": response.json() if response.text else {}
@@ -221,7 +222,7 @@ class ShopifyService:
     async def fetch_shopify_orders(
         self,
         connection_id: int,
-        bearer_token: str = '15|dIKpifYjKg4jlutB5mZidgG9x4x1iDsdHNLPEfgR9f09d70d'
+        bearer_token: str = FUNDAM_API_KEY
     ) -> List[Dict[str, Any]]:
         """
         Fetch orders via connector API.
@@ -234,7 +235,7 @@ class ShopifyService:
             List of orders
         """
         try:
-            logger.info(f"📦 Fetching Shopify orders via connector (connection {connection_id})")
+            logger.info(f" Fetching Shopify orders via connector (connection {connection_id})")
 
             url = f"{self.connector_base_url}/shopify/fetch/orders/{connection_id}"
 
@@ -251,7 +252,7 @@ class ShopifyService:
             # The connector might return orders directly or nested in a data field
             orders = data.get("orders") or data.get("data") or (data if isinstance(data, list) else [])
 
-            logger.info(f"✅ Total orders fetched: {len(orders)}")
+            logger.info(f"Total orders fetched: {len(orders)}")
             return orders
 
         except Exception as e:
@@ -261,7 +262,7 @@ class ShopifyService:
     async def fetch_shopify_products(
         self,
         connection_id: int,
-        bearer_token: str = '15|dIKpifYjKg4jlutB5mZidgG9x4x1iDsdHNLPEfgR9f09d70d'
+        bearer_token: str = FUNDAM_API_KEY
     ) -> List[Dict[str, Any]]:
         """
         Fetch products via connector API.
@@ -274,7 +275,7 @@ class ShopifyService:
             List of products
         """
         try:
-            logger.info(f"🛍️  Fetching Shopify products via connector (connection {connection_id})")
+            logger.info(f" Fetching Shopify products via connector (connection {connection_id})")
 
             url = f"{self.connector_base_url}/shopify/fetch/products/{connection_id}"
 
@@ -291,7 +292,7 @@ class ShopifyService:
             # The connector might return products directly or nested in a data field
             products = data.get("products") or data.get("data") or (data if isinstance(data, list) else [])
 
-            logger.info(f"✅ Total products fetched: {len(products)}")
+            logger.info(f"Total products fetched: {len(products)}")
             return products
 
         except Exception as e:
@@ -301,7 +302,7 @@ class ShopifyService:
     async def fetch_shopify_customers(
         self,
         connection_id: int,
-        bearer_token: str = '15|dIKpifYjKg4jlutB5mZidgG9x4x1iDsdHNLPEfgR9f09d70d'
+        bearer_token: str = FUNDAM_API_KEY
     ) -> List[Dict[str, Any]]:
         """
         Fetch customers via connector API.
@@ -331,7 +332,7 @@ class ShopifyService:
             # The connector might return customers directly or nested in a data field
             customers = data.get("customers") or data.get("data") or (data if isinstance(data, list) else [])
 
-            logger.info(f"✅ Total customers fetched: {len(customers)}")
+            logger.info(f"Total customers fetched: {len(customers)}")
             return customers
 
         except Exception as e:
@@ -360,7 +361,7 @@ class ShopifyService:
             Number of orders synced
         """
         try:
-            logger.info(f"🔄 Auto-syncing orders for {shop_name}")
+            logger.info(f" Auto-syncing orders for {shop_name}")
 
             # Step 1: Get connection ID from connector
             connection_id = await self.get_connection_id_by_shop(shop_name, access_token)
@@ -376,7 +377,7 @@ class ShopifyService:
             if orders:
                 from lib.config import DatabaseManager
                 DatabaseManager.store_shopify_orders(session_id, orders)
-                logger.info(f"✅ Auto-sync completed: {len(orders)} orders stored for {shop_name}")
+                logger.info(f"Auto-sync completed: {len(orders)} orders stored for {shop_name}")
             else:
                 logger.warning(f"⚠️ No orders fetched from {shop_name}")
 
@@ -432,7 +433,7 @@ class ShopifyService:
                 logger.warning(f"⚠️  Failed to transform order {order.get('id')}: {str(e)}")
                 continue
 
-        logger.info(f"✅ Transformed {len(standardized_orders)} order line items")
+        logger.info(f"Transformed {len(standardized_orders)} order line items")
         return standardized_orders
 
     async def close(self):

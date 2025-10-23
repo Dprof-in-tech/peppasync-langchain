@@ -307,7 +307,7 @@ class ForecastingEngine:
             Forecast results in same format as Prophet
         """
         try:
-            logger.info(f"🔄 Using ARIMA fallback for sparse data ({len(historical_data)} records)")
+            logger.info(f" Using ARIMA fallback for sparse data ({len(historical_data)} records)")
 
             # Prepare data
             df = historical_data.copy().sort_values('ds')
@@ -415,7 +415,7 @@ class ForecastingEngine:
                 }
             }
 
-            logger.info(f"✅ ARIMA forecast complete: {forecast_periods} periods")
+            logger.info(f"ARIMA forecast complete: {forecast_periods} periods")
             return result
 
         except Exception as e:
@@ -514,7 +514,7 @@ class ForecastingEngine:
             )
 
             if cache_key in self.forecast_cache:
-                logger.info("✅ Returning cached forecast")
+                logger.info("Returning cached forecast")
                 return self.forecast_cache[cache_key]
 
             # Validate minimum data requirement (lowered from 500 to 30)
@@ -541,7 +541,7 @@ class ForecastingEngine:
             if detect_frequency and len(prophet_df) >= 10:
                 detected_freq = self.auto_detect_frequency(prophet_df)
                 if detected_freq != frequency:
-                    logger.info(f"🔄 Overriding frequency {frequency} → {detected_freq}")
+                    logger.info(f" Overriding frequency {frequency} → {detected_freq}")
                     frequency = detected_freq
                     # Re-prepare data with new frequency
                     prophet_df = self.prepare_data_for_prophet(
@@ -567,7 +567,7 @@ class ForecastingEngine:
                 return result
 
             # Continue with Prophet for rich datasets (>= 100 records)
-            logger.info(f"✅ Using Prophet for {data_points} data points")
+            logger.info(f"Using Prophet for {data_points} data points")
 
             # Step 2: Auto-tune hyperparameters if enabled and sufficient data
             # For sparse data (< 50% density), use more conservative parameters

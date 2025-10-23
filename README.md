@@ -2,7 +2,7 @@
 
 A modern Business Intelligence platform powered by LangGraph and LangChain with Pinecone vector store for AI-driven analytics and automated business insights.
 
-## 🔄 System Architecture & Flow
+##  System Architecture & Flow
 
 ### Core System Flow
 
@@ -138,20 +138,20 @@ sequenceDiagram
 
 | Endpoint | Purpose | Session Tracking | Data Sources |
 |----------|---------|------------------|--------------|
-| `POST /chat` | **Conversational BI** with context memory | ✅ Required | Pinecone + Database/Shopify/Mock |
+| `POST /chat` | **Conversational BI** with context memory | Required | Pinecone + Database/Shopify/Mock |
 | `POST /retrieve_and_generate` | **Standalone insights** - independent queries | ❌ Removed | Pinecone + Database/Mock |
 | `POST /retrieve_and_visualize` | **Standalone visualizations** - chart generation | ❌ Removed | Pinecone + Database/Mock |
 | `POST /database/test` | Test PostgreSQL connection | ❌ None | Direct DB Test |
-| `POST /database/connect` | Connect user database | ✅ Required | Connection Storage |
-| `GET /database/status/{id}` | Check connection status | ✅ Required | Connection Info |
-| `POST /database/disconnect/{id}` | Disconnect database | ✅ Required | Connection Cleanup |
-| `POST /shopify/connect` | **Initiate Shopify OAuth** | ✅ Required | External Connector API |
-| `GET /shopify/status/{id}` | **Check Shopify connection & auto-sync** | ✅ Required | Redis + Shopify API |
-| `POST /shopify/oauth-callback` | **Receive OAuth access_token** | ✅ Required | Token Storage + Sync |
-| `POST /shopify/disconnect/{id}` | **Disconnect Shopify store** | ✅ Required | Connection Cleanup |
-| `GET /analytics/sales` | Sales analytics data | ✅ Required | Active Data Source |
-| `GET /analytics/orders` | Orders analytics data | ✅ Required | Active Data Source |
-| `GET /analytics/inventory` | Inventory analytics data | ✅ Required | Active Data Source |
+| `POST /database/connect` | Connect user database | Required | Connection Storage |
+| `GET /database/status/{id}` | Check connection status | Required | Connection Info |
+| `POST /database/disconnect/{id}` | Disconnect database | Required | Connection Cleanup |
+| `POST /shopify/connect` | **Initiate Shopify OAuth** | Required | External Connector API |
+| `GET /shopify/status/{id}` | **Check Shopify connection & auto-sync** | Required | Redis + Shopify API |
+| `POST /shopify/oauth-callback` | **Receive OAuth access_token** | Required | Token Storage + Sync |
+| `POST /shopify/disconnect/{id}` | **Disconnect Shopify store** | Required | Connection Cleanup |
+| `GET /analytics/sales` | Sales analytics data | Required | Active Data Source |
+| `GET /analytics/orders` | Orders analytics data | Required | Active Data Source |
+| `GET /analytics/inventory` | Inventory analytics data | Required | Active Data Source |
 
 ### Redundant Endpoints (Should be removed)
 
@@ -379,7 +379,7 @@ The system uses **ONE data source per session**:
 
 **Note**: User cannot have both PostgreSQL and Shopify connected simultaneously. Connecting one disconnects the other.
 
-## 🔄 System Benefits
+##  System Benefits
 
 ### Simplified Architecture
 - **Stateless Core**: Most endpoints don't need session tracking

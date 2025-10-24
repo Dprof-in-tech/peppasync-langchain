@@ -93,6 +93,7 @@ async def welcome_insights(email: str, session_id: Optional[str] = None):
         prompt = (
             f"""
             You are a professional business assistant. Your job is to analyze the business data {sales_data} and {inventory_data} for user with email {email} (session: {session_id}) and return 3 things that are going wrong with this business from their business data and some recommendations on how to fix them.
+            The problems you are highlitghting MUST be based on the data provided and MUST NOT be generic.
 
             This is what a sample response looks like:
             {{
@@ -108,7 +109,7 @@ async def welcome_insights(email: str, session_id: Optional[str] = None):
             }}
 
             Analyze the data and return a JSON object with:
-            - problems: list of top 3 issues identified
+            - problems: list of top 3 issues identified. let it be short and concise.
             - recommendations: list of actionable suggestions
             Respond ONLY with a valid JSON object.
 

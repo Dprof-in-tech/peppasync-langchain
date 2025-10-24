@@ -11,7 +11,8 @@ from ...auth.signup import create_user_with_otp, verify_user_otp, check_user_can
 from ...db.database import get_db
 from ...db.models import User
 from lib.agent import UnifiedBusinessAgent
-from lib.config import DatabaseManager
+from lib.config import DatabaseManager, LLMManager
+from langchain.schema import HumanMessage, SystemMessage
 
 user_router = APIRouter()
 # Set logger
@@ -91,26 +92,43 @@ async def welcome_insights(email: str, session_id: Optional[str] = None):
         # Compose a prompt for the LLM to analyze business data for this user/session
         prompt = (
             f"""
-            You are an onboarding assistant. Analyze the business data {sales_data} and {inventory_data} for user with email {email} (session: {session_id}) and return a JSON object with:
-            - low_stock_products: list of product names with low stock
-            - underperforming_products: list of product names with declining sales
+            You are a professional business assistant. Your job is to analyze the business data {sales_data} and {inventory_data} for user with email {email} (session: {session_id}) and return 3 things that are going wrong with this business from their business data and some recommendations on how to fix them.
+
+            This is what a sample response looks like:
+            {{
+              "problems":[
+              "product 19 has 5 stock left, you WILL run out of stock tomorrow",
+              "Product A has 0 sales this month, you are losing money",
+              "Product B has high return rate of 15%, customers are unhappy"
+              ]
+              "recommendations": [
+                "Increase marketing for Product C",
+                "Consider discounts for Product A to boost sales"
+              ]
+            }}
+
+            Analyze the data and return a JSON object with:
+            - problems: list of top 3 issues identified
             - recommendations: list of actionable suggestions
             Respond ONLY with a valid JSON object.
+
+            IMPORTANT:
+            YOU MUST SOUND AS GRAVE AS POSSIBLE WHEN DESCRIBING THE PROBLEMS.
             """
         )
-        # Call the correct method on UnifiedBusinessAgent
-        business_agent = UnifiedBusinessAgent()
-        llm_response = await business_agent.analyze_direct_query(
-            query=prompt,
-            business_data={
-                "sales_data": sales_data,
-                "inventory_data": inventory_data
-            },
-            conversation_history=None
-        )
+
+        messages = [
+            SystemMessage(content="You are a business intelligence analyst. Respond ONLY with valid JSON. Do NOT use markdown code blocks or any formatting - just pure JSON."),
+            HumanMessage(content=prompt)
+        ]
+
+        llm = LLMManager.get_chat_llm()
+
+        llm_response = llm.invoke(messages)
         # Try to parse the LLM response as JSON
         try:
-            data = llm_response if isinstance(llm_response, dict) else json.loads(llm_response)
+            result = json.loads(llm_response.content.strip())
+            data = result if isinstance(result, dict) else json.loads(result)
         except Exception as e:
             return JSONResponse(status_code=500, content={"error": "LLM did not return valid JSON", "llm_response": str(llm_response)})
         return data

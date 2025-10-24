@@ -220,6 +220,92 @@ class InsightGenerationTool(BaseTool):
 
         # Default: use expert insights
         return True
+    
+    def _aggregate_sales_by_product(self, sales_data: List[Dict]) -> List[Dict]:
+        """
+        Aggregate sales data by product for both Shopify (nested line_items) and Postgres (flat) formats.
+        Returns list of products sorted by 30-day revenue.
+        """
+        from collections import defaultdict
+        from datetime import datetime, timedelta
+
+        product_stats = defaultdict(lambda: {
+            'total_revenue_30d': 0,
+            'total_units_30d': 0,
+            'transaction_count_30d': 0,
+            'total_revenue_14d': 0,
+            'total_units_14d': 0,
+            'transaction_count_14d': 0,
+            'product_name': None,
+            'product_id': None
+        })
+
+        now = datetime.now()
+        two_weeks_ago = now - timedelta(days=14)
+
+        for item in sales_data:
+            if not isinstance(item, dict):
+                continue
+
+            # Shopify order: has 'line_items' (list of products in the order)
+            if 'line_items' in item and isinstance(item['line_items'], list):
+                sale_date_str = item.get('created_at') or item.get('order_date') or item.get('sale_date')
+                is_recent = False
+                if sale_date_str:
+                    try:
+                        sale_date = datetime.fromisoformat(str(sale_date_str).replace('Z', '+00:00'))
+                        is_recent = sale_date >= two_weeks_ago
+                    except:
+                        pass
+                for li in item['line_items']:
+                    product_id = li.get('product_id') or li.get('id') or 'unknown'
+                    product_name = li.get('title') or li.get('name') or li.get('product_name') or f"Product {product_id}"
+                    # Shopify: price * quantity per line item
+                    try:
+                        revenue = float(li.get('price') or li.get('total_amount') or li.get('sales_amount') or li.get('amount') or 0) * int(li.get('quantity') or 1)
+                    except Exception:
+                        revenue = 0
+                    units = int(li.get('quantity') or li.get('units_sold') or li.get('qty') or 1)
+
+                    product_stats[product_id]['product_id'] = product_id
+                    product_stats[product_id]['product_name'] = product_name
+                    product_stats[product_id]['total_revenue_30d'] += revenue
+                    product_stats[product_id]['total_units_30d'] += units
+                    product_stats[product_id]['transaction_count_30d'] += 1
+                    if is_recent:
+                        product_stats[product_id]['total_revenue_14d'] += revenue
+                        product_stats[product_id]['total_units_14d'] += units
+                        product_stats[product_id]['transaction_count_14d'] += 1
+            else:
+                # Postgres/flat format
+                product_id = item.get('product_id') or item.get('id') or 'unknown'
+                product_name = item.get('product_name') or item.get('name') or f"Product {product_id}"
+                try:
+                    revenue = float(item.get('total_amount') or item.get('sales_amount') or item.get('amount') or 0)
+                except Exception:
+                    revenue = 0
+                units = int(item.get('quantity') or item.get('units_sold') or item.get('qty') or 1)
+                sale_date_str = item.get('sale_date') or item.get('order_date') or item.get('created_at')
+                is_recent = False
+                if sale_date_str:
+                    try:
+                        sale_date = datetime.fromisoformat(str(sale_date_str).replace('Z', '+00:00'))
+                        is_recent = sale_date >= two_weeks_ago
+                    except:
+                        pass
+                product_stats[product_id]['product_id'] = product_id
+                product_stats[product_id]['product_name'] = product_name
+                product_stats[product_id]['total_revenue_30d'] += revenue
+                product_stats[product_id]['total_units_30d'] += units
+                product_stats[product_id]['transaction_count_30d'] += 1
+                if is_recent:
+                    product_stats[product_id]['total_revenue_14d'] += revenue
+                    product_stats[product_id]['total_units_14d'] += units
+                    product_stats[product_id]['transaction_count_14d'] += 1
+
+        result = list(product_stats.values())
+        result.sort(key=lambda x: x['total_revenue_30d'], reverse=True)
+        return result
 
 
     def _retrieve_expert_knowledge(self, query: str, sales_data: List[Dict] = None) -> str:

@@ -9,13 +9,9 @@ build:
       - apt-get install -y gcc g++ make libpq-dev build-essential
     build:
       - echo "Upgrading pip..."
-      - pip install --upgrade pip setuptools wheel
-      - echo "Installing cmdstanpy separately..."
-      - pip install --no-cache-dir cmdstanpy
-      - echo "Installing remaining dependencies..."
-      - pip install --no-cache-dir -r requirements.txt
-      - echo "Installing cmdstan..."
-      - python -c "import cmdstanpy; cmdstanpy.install_cmdstan()"
+      - python3 -m pip install --upgrade pip setuptools wheel
+      - echo "Installing Python dependencies..."
+      - python3 -m pip install --no-cache-dir -r requirements.txt
 
 run:
   command: uvicorn app:app --host 0.0.0.0 --port 8000 --workers 1

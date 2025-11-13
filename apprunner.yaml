@@ -3,9 +3,19 @@ runtime: python311
 
 build:
   commands:
+    pre-build:
+      - echo "Installing system dependencies..."
+      - apt-get update
+      - apt-get install -y gcc g++ make libpq-dev build-essential
     build:
-      - echo "Installing dependencies..."
-      - pip install -r requirements.txt
+      - echo "Upgrading pip..."
+      - pip install --upgrade pip setuptools wheel
+      - echo "Installing cmdstanpy separately..."
+      - pip install --no-cache-dir cmdstanpy
+      - echo "Installing remaining dependencies..."
+      - pip install --no-cache-dir -r requirements.txt
+      - echo "Installing cmdstan..."
+      - python -c "import cmdstanpy; cmdstanpy.install_cmdstan()"
 
 run:
   command: uvicorn app:app --host 0.0.0.0 --port 8000 --workers 1

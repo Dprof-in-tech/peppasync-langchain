@@ -5,13 +5,17 @@ build:
   commands:
     pre-build:
       - echo "Installing system dependencies..."
-      - apt-get update
-      - apt-get install -y gcc g++ make libpq-dev build-essential
+      - yum groupinstall -y "Development Tools"
+      - yum install -y postgresql-devel
     build:
       - echo "Upgrading pip..."
       - python3 -m pip install --upgrade pip setuptools wheel
-      - echo "Installing Python dependencies..."
+      - echo "Installing cmdstanpy first..."
+      - python3 -m pip install --no-cache-dir cmdstanpy==1.2.0
+      - echo "Installing remaining dependencies..."
       - python3 -m pip install --no-cache-dir -r requirements.txt
+      - echo "Installing CmdStan compiler..."
+      - python3 -c "import cmdstanpy; cmdstanpy.install_cmdstan(cores=2, verbose=True)"
 
 run:
   command: uvicorn app:app --host 0.0.0.0 --port 8000 --workers 1
@@ -24,3 +28,5 @@ run:
       value: "1"
     - name: MALLOC_TRIM_THRESHOLD_
       value: "100000"
+    - name: CMDSTAN
+      value: /root/.cmdstan

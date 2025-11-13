@@ -14,11 +14,9 @@ build:
       - python3 -m pip install --no-cache-dir cmdstanpy==1.2.0
       - echo "Installing remaining dependencies..."
       - python3 -m pip install --no-cache-dir -r requirements.txt
-      - echo "Installing CmdStan compiler..."
-      - python3 -c "import cmdstanpy; cmdstanpy.install_cmdstan(cores=2, verbose=True)"
 
 run:
-  command: uvicorn app:app --host 0.0.0.0 --port 8000 --workers 1
+  command: python3 -m uvicorn app:app --host 0.0.0.0 --port 8000 --workers 1
   network:
     port: 8000
   env:

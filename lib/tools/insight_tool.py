@@ -89,7 +89,7 @@ class InsightGenerationTool(BaseTool):
 
             CAMPAIGN DATA:
             {json.dumps(campaign_data, indent=2, default=json_serializer)}
-            {f"EXPERT SALES AND MARKETING KNOWLEDGE:\\n{expert_insights[:500]}..." if expert_insights else ""}
+            {("EXPERT SALES AND MARKETING KNOWLEDGE:\n" + expert_insights[:500] + "...") if expert_insights else ""}
 
             RESPOND WITH A JSON OBJECT IN THIS EXACT FORMAT:
             {{

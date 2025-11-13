@@ -1,13 +1,14 @@
 version: 1.0
-runtime: python3
+runtime: python311
+
 build:
   commands:
     build:
       - echo "Installing dependencies..."
       - pip install -r requirements.txt
+
 run:
-  runtime-version: 3.10
-  command: uvicorn app:app --host 0.0.0.0 --port 8000
+  command: uvicorn app:app --host 0.0.0.0 --port 8000 --workers 1
   network:
     port: 8000
   env:
@@ -15,3 +16,5 @@ run:
       value: /app
     - name: PYTHONUNBUFFERED
       value: "1"
+    - name: MALLOC_TRIM_THRESHOLD_
+      value: "100000"
